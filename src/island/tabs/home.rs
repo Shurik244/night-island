@@ -173,13 +173,23 @@ impl App {
         if !self.pointer.vol_drag {
             return;
         }
+        if self.ui.tab == view::Tab::Yandex {
+            let level = view::wave_volume_level(self.pill_rect(true), self.scale, x as f32);
+            let current = self.ui.yandex.volume_preview.unwrap_or(self.ui.yandex.state.config.volume);
+            if level != current && crate::services::yandex::set_volume(f32::from(level) / 100.0) {
+                self.ui.yandex.volume_preview = Some(level);
+                self.repaint_expanded();
+            }
+            return;
+        }
         let (tl, tr, _) = view::volume_track(self.pill_rect(true), self.scale, view::home_wide(&self.ui));
         let level = ((x as f32 - tl) / (tr - tl).max(1.0)).clamp(0.0, 1.0);
         let current = if self.ui.home.vol_track { self.ui.home.app_vol } else { self.ui.home.vol };
         if (level - current).abs() > 0.004 {
             if self.ui.home.vol_track {
-                self.ui.home.app_vol = level;
-                volume::set_app_volume(&self.ui.media.source, level);
+                if volume::set_app_volume(&self.ui.media.source, level) {
+                    self.ui.home.app_vol = level;
+                }
             } else {
                 self.ui.home.vol = level;
                 volume::set(level);

@@ -312,15 +312,7 @@ impl Renderer {
                     rt.FillGeometry(&geometry, &brush, None);
                 }
                 Tool::Text => {
-                    let format = self.dwrite.CreateTextFormat(
-                        w!("Segoe UI"),
-                        None,
-                        DWRITE_FONT_WEIGHT_BOLD,
-                        DWRITE_FONT_STYLE_NORMAL,
-                        DWRITE_FONT_STRETCH_NORMAL,
-                        24.0,
-                        w!("en-us"),
-                    )?;
+                    let format = crate::ui::fonts::format(&self.dwrite, 24.0, DWRITE_FONT_WEIGHT_BOLD)?;
                     let shown = if editing { format!("{}|", a.text) } else { a.text.clone() };
                     let wide: Vec<u16> = shown.encode_utf16().collect();
                     let rect = D2D_RECT_F { left: p0.X, top: p0.Y - 4.0, right: p0.X + 4000.0, bottom: p0.Y + 40.0 };

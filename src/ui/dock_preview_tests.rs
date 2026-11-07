@@ -444,6 +444,10 @@ fn native_dock_preview_live_paint_switch_close_sync_and_dpi() -> Result<()> {
             screenshot(&preview, "hover-discord-unavailable")?;
         }
         click(&preview, Action::Dismiss);
+        let deadline = Instant::now() + Duration::from_millis(350);
+        while preview.is_open() && Instant::now() < deadline {
+            pump();
+        }
         assert!(!preview.is_open());
         assert!(preview.dismissed());
         assert!(preview.state.thumbnail.is_none());

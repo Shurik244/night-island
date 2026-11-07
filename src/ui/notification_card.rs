@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
@@ -29,6 +30,8 @@ pub enum Action {
     Dismiss = 3,
     History = 4,
     Hover = 5,
+    ScrollUp = 6,
+    ScrollDown = 7,
 }
 
 struct State {
@@ -42,6 +45,8 @@ struct State {
     tracking: bool,
     hover_close: bool,
     closing: bool,
+    scroll: Option<f32>,
+    scroll_max: Cell<f32>,
 }
 
 impl State {
@@ -68,12 +73,7 @@ fn notify(hwnd: HWND, state: &State, action: Action) {
 }
 
 fn inside(rect: Rect, scale: f32, point: (f32, f32)) -> bool {
-    let radius = (26.0 * scale).min(rect.2.min(rect.3) / 2.0);
-    let q = (
-        point.0.clamp(rect.0 + radius, rect.0 + rect.2 - radius),
-        point.1.clamp(rect.1 + radius, rect.1 + rect.3 - radius),
-    );
-    (point.0 - q.0).powi(2) + (point.1 - q.1).powi(2) <= radius * radius
+    view::rounded_body_contains(rect, 26.0 * scale, point)
 }
 
 extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -124,6 +124,11 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
                 notify(hwnd, state, Action::Leave);
                 LRESULT(0)
             }
+            WM_MOUSEWHEEL if state.scroll.is_some() && !state.closing => {
+                let action = if (wparam.0 >> 16) as i16 > 0 { Action::ScrollUp } else { Action::ScrollDown };
+                notify(hwnd, state, action);
+                LRESULT(0)
+            }
             WM_LBUTTONUP if !state.closing => {
                 notify(hwnd, state, if state.hover_close { Action::Dismiss } else { Action::History });
                 LRESULT(0)
@@ -137,10 +142,14 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
     }
 }
 
-pub fn card_target(source: Rect, work: Rect, edge: Option<Edge>, scale: f32) -> Rect {
+pub fn card_target(source: Rect, work: Rect, edge: Option<Edge>, scale: f32, record: Option<&Record>) -> Rect {
     let (left, top, right, bottom) = work;
-    let width = (view::NOTIFICATION_SIZE.0 * scale).min((right - left - 16.0 * scale).max(1.0));
-    let height = (view::NOTIFICATION_SIZE.1 * scale).min((bottom - top - 16.0 * scale).max(1.0));
+    let width = (record.map(view::notification_card_width).unwrap_or(view::NOTIFICATION_SIZE.0) * scale)
+        .min((right - left - 16.0 * scale).max(1.0));
+    let height = record
+        .map(|record| view::notification_card_height(record, width, scale))
+        .unwrap_or(view::NOTIFICATION_SIZE.1 * scale)
+        .min((bottom - top - 16.0 * scale).max(1.0));
     let x = match edge {
         Some(Edge::Left) => source.0,
         Some(Edge::Right) => source.0 + source.2 - width,
@@ -152,6 +161,27 @@ pub fn card_target(source: Rect, work: Rect, edge: Option<Edge>, scale: f32) -> 
         _ => source.1,
     };
     (x.clamp(left, (right - width).max(left)), y.clamp(top, (bottom - height).max(top)), width, height)
+}
+
+pub fn pet_card_target(source: Rect, work: Rect, scale: f32, expanded: bool, record: Option<&Record>) -> Rect {
+    let mut target = card_target(source, work, None, scale, record);
+    let gap = 8.0 * scale;
+    if expanded {
+        let space = (source.1 - work.1).max(work.3 - source.1 - source.3) - gap;
+        target.3 = target.3.max((330.0 * scale).min(space));
+    }
+    let above = source.1 - target.3 - gap;
+    target.1 = if above >= work.1 { above } else { (source.1 + source.3 + gap).min(work.3 - target.3).max(work.1) };
+    target
+}
+
+pub fn expanded_card_layout(island: Rect, pill: Rect, work: Rect, scale: f32, record: Option<&Record>) -> (Rect, Rect) {
+    let target = pet_card_target(island, work, scale, false, record);
+    let (x, y, width, height) = island;
+    let w = pill.2.min(width);
+    let h = pill.3.min(height);
+    let anchor_y = if target.1 < y { y } else { y + height - h };
+    ((x + (width - w) / 2.0, anchor_y, w, h), target)
 }
 
 pub struct NotificationCard {
@@ -216,6 +246,8 @@ impl NotificationCard {
             tracking: false,
             hover_close: false,
             closing: false,
+            scroll: None,
+            scroll_max: Cell::new(0.0),
         });
         let target = unsafe { compositor.cast::<ICompositorDesktopInterop>()?.CreateDesktopWindowTarget(hwnd, true)? };
         let root = compositor.CreateContainerVisual()?;
@@ -250,6 +282,10 @@ impl NotificationCard {
 
     pub fn hwnd(&self) -> HWND {
         self.hwnd
+    }
+
+    pub fn target_rect(&self) -> Rect {
+        self.card
     }
 
     pub fn screen_rect(&self) -> Rect {
@@ -311,20 +347,14 @@ impl NotificationCard {
         Ok(())
     }
 
-    pub fn show(
-        &mut self,
-        record: &Record,
-        pending: usize,
-        source: Rect,
-        work: Rect,
-        edge: Option<Edge>,
-        scale: f32,
-    ) -> Result<()> {
+    pub fn show(&mut self, record: &Record, pending: usize, source: Rect, target: Rect, scale: f32) -> Result<()> {
         self.state.scale = scale;
         self.state.closing = false;
+        self.state.scroll = None;
+        self.state.scroll_max.set(0.0);
         self.state.tracking = false;
         self.state.hover_close = false;
-        self.card = card_target(source, work, edge, scale);
+        self.card = target;
         self.transition(source, self.card, OPEN_MS)?;
         self.update(record, pending)?;
         let fade = self.compositor.CreateScalarKeyFrameAnimation()?;
@@ -339,12 +369,40 @@ impl NotificationCard {
         Ok(())
     }
 
+    pub fn expand(&mut self, source: Rect, work: Rect, record: &Record, pending: usize) -> Result<()> {
+        if self.state.scroll.is_some() {
+            return Ok(());
+        }
+        let from = self.state.rect();
+        self.card = pet_card_target(source, work, self.state.scale, true, Some(record));
+        self.state.scroll = Some(0.0);
+        self.transition(from, self.card, OPEN_MS)?;
+        self.update(record, pending)
+    }
+
+    pub fn scroll(&mut self, down: bool) {
+        if let Some(scroll) = &mut self.state.scroll {
+            let delta = if down { 44.0 } else { -44.0 } * self.state.scale;
+            *scroll = (*scroll + delta).clamp(0.0, self.state.scroll_max.get());
+        }
+    }
+
     pub fn update(&self, record: &Record, pending: usize) -> Result<()> {
         let (r, g, b) = super::theme::panel_u8();
         self.background.SetBrush(&self.compositor.CreateColorBrushWithColor(Color { A: 255, R: r, G: g, B: b })?)?;
         let rect = (self.card.0 - self.state.frame.0, self.card.1 - self.state.frame.1, self.card.2, self.card.3);
         self.content.paint(&self.gpu, |p| {
-            let _ = view::paint_notification_card(p, rect, self.state.scale, record, pending, self.state.hover_close);
+            if let Ok(max) = view::paint_notification_card(
+                p,
+                rect,
+                self.state.scale,
+                record,
+                pending,
+                self.state.hover_close,
+                self.state.scroll,
+            ) {
+                self.state.scroll_max.set(max);
+            }
         })
     }
 
@@ -385,6 +443,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shrinking_pet_card_keeps_hit_bounds_ordered_at_any_monitor_origin() {
+        let frame = (2196.0686, 386.0, 51.86258, 53.1);
+        assert!(inside(frame, 1.0, (2222.0, 412.0)));
+
+        for (left, top, width, height) in [
+            (0.0, 0.0, 1920.0, 1080.0),
+            (0.0, 0.0, 2560.0, 1440.0),
+            (1920.0, 0.0, 3840.0, 2160.0),
+            (-5120.0, -1440.0, 5120.0, 1440.0),
+            (3840.0, -2160.0, 7680.0, 4320.0),
+        ] {
+            for scale in [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5] {
+                for (w, h) in [(frame.2, frame.3), (frame.3, frame.2), (frame.2, frame.2)] {
+                    let center = (left + width * 0.85, top + height * 0.37);
+                    let (w, h) = (w * scale, h * scale);
+                    let (x, y) = (center.0 - w / 2.0, center.1 - h / 2.0);
+                    let frame = (x, y, w, h);
+                    assert!(inside(frame, scale, center));
+                    assert!(!inside(frame, scale, (x, y)));
+                    assert!(!inside(frame, scale, (x + w + scale, center.1)));
+                    assert!(!inside(frame, scale, (center.0, y + h + scale)));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn notification_cards_fit_every_edge_and_negative_monitor_coordinates() {
         for scale in [0.75, 1.0, 1.5, 2.0] {
             for work in [(0.0, 0.0, 1920.0, 1040.0), (-1920.0, -1080.0, 0.0, 0.0)] {
@@ -395,7 +480,7 @@ mod tests {
                         Some(Edge::Right) => (work.2 - 42.0, work.1 + 500.0, 42.0, 200.0),
                         _ => (work.0 + 800.0, work.1, 200.0, 34.0),
                     };
-                    let target = card_target(source, work, edge, scale);
+                    let target = card_target(source, work, edge, scale, None);
                     assert!(target.0 >= work.0 && target.1 >= work.1);
                     assert!(target.0 + target.2 <= work.2 + 0.01 && target.1 + target.3 <= work.3 + 0.01);
                     assert!(inside(target, scale, (target.0 + target.2 / 2.0, target.1 + target.3 / 2.0)));

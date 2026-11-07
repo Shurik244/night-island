@@ -23,12 +23,15 @@ pub fn run() -> Result<()> {
             waited += 1;
         }
         if windows::Win32::Foundation::GetLastError() == windows::Win32::Foundation::ERROR_ALREADY_EXISTS {
-            if let Ok(existing) = FindWindowW(w!("NightIsland.Window"), None) {
+            if !std::env::args().any(|arg| arg == "--startup")
+                && let Ok(existing) = FindWindowW(w!("NightIsland.Window"), None)
+            {
                 let _ = PostMessageW(Some(existing), WM_SHOW, WPARAM(0), LPARAM(0));
             }
             return Ok(());
         }
 
+        let started = Instant::now();
         crate::data::log::init();
         crate::log_info!("starting Night Island {}", env!("CARGO_PKG_VERSION"));
         update::clean_up_after_update();
@@ -80,6 +83,9 @@ pub fn run() -> Result<()> {
         let weather_city = settings.weather_city.clone();
         let (weather_lat, weather_lon) = (settings.weather_lat, settings.weather_lon);
         crate::ui::i18n::set_ru(settings.language == crate::data::settings::Language::Ru);
+        crate::ui::icons::set_legacy(settings.legacy_icons);
+        crate::ui::fonts::load_custom(&settings.interface_font_file);
+        crate::ui::fonts::set(settings.interface_font);
         let dpi_scale = GetDpiForWindow(hwnd) as f32 / 96.0;
         ai::configure(&settings.ai);
         update::configure(settings.update_check, settings.update_beta);
@@ -95,11 +101,12 @@ pub fn run() -> Result<()> {
             hwnd,
             windows::Win32::System::RemoteDesktop::NOTIFY_FOR_THIS_SESSION,
         );
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        crate::log_info!("Primary window ready in {} ms", started.elapsed().as_millis());
         with_app(|app| app.configure_system_notifications());
         with_app(|app| app.configure_desktop_dock());
         with_app(|app| app.configure_top_panel());
 
-        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         let failed = with_app_value(|a| register_hotkeys(hwnd, &a.settings)).unwrap_or_default();
         if !failed.is_empty() {
             crate::log_warn!("hotkeys taken by another program: {failed:?}");
@@ -123,8 +130,17 @@ pub fn run() -> Result<()> {
         weather::start(hwnd, weather_on);
         spotify::init(hwnd);
         discord::start(hwnd);
-        with_app(|a| a.start_game_watch());
+        with_app(|a| {
+            a.start_game_watch();
+            if a.settings.tour_pending() && !cfg!(feature = "demo") {
+                a.open_guide();
+            }
+        });
 
+        if !cfg!(feature = "demo") {
+            crate::platform::autostart::refresh();
+        }
+        crate::log_info!("Startup services scheduled in {} ms", started.elapsed().as_millis());
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
@@ -140,6 +156,8 @@ impl App {
         app.store = Store::open();
         app.apply_character();
         app.ui.cfg = app.settings.clone();
+        app.ui.yandex.ratings_hidden = !app.settings.wave_ratings;
+        app.ui.yandex.search_hidden = !app.settings.wave_search;
         app.ui.char_inset = if app.attached_character_on() { CHAR_INSET } else { 0.0 };
         app.cw = view::collapsed_width(&app.ui, COLLAPSED.0);
         if app.settings.hang() != Hang::Down {
@@ -193,6 +211,7 @@ impl App {
         let docked = settings.placement == Placement::Docked;
         let collapsed =
             gpu.layer(&compositor, window_size(scale, Win::Small, docked, COLLAPSED.0, &window_room(&settings)))?;
+        let progress_fill = gpu.layer(&compositor, collapsed.size())?;
         let expanded =
             gpu.layer(&compositor, window_size(scale, Win::Big, docked, COLLAPSED.0, &window_room(&settings)))?;
         let ear_px = ((EAR * scale).round() as i32, (EAR * scale).round() as i32);
@@ -222,8 +241,6 @@ impl App {
         ring.sprite.SetIsVisible(false)?;
         let highlight = gpu.layer(&compositor, collapsed.size())?;
         highlight.sprite.SetIsVisible(false)?;
-        let eq_shape = compositor.CreatePathGeometry()?;
-        let eq_clip = compositor.CreateGeometricClipWithGeometry(&eq_shape)?;
         let bump = gpu.layer(&compositor, bump_size(scale, (COLLAPSED.0, COLLAPSED.1)))?;
         bump.sprite.SetIsVisible(false)?;
         bump.sprite.SetCenterPoint(Vector3 { X: bump.size().0 as f32 / 2.0, Y: 0.0, Z: 0.0 })?;
@@ -245,6 +262,7 @@ impl App {
         let children = visual.Children()?;
         children.InsertAtTop(&backdrop)?;
         children.InsertAtTop(&tint)?;
+        children.InsertAtTop(&progress_fill.sprite)?;
         children.InsertAtTop(&highlight.sprite)?;
         children.InsertAtTop(&expanded.sprite)?;
         children.InsertAtTop(&collapsed.sprite)?;
@@ -304,12 +322,17 @@ impl App {
             win: Win::Small,
             compositor,
             geometry,
+            open_motion: None,
             state: State::Collapsed,
             _target: target,
             _visual: visual,
             backdrop,
             tint,
-            ui: view::UiState::new(),
+            ui: {
+                let mut ui = view::UiState::new();
+                ui.composited_progress = true;
+                ui
+            },
             store: None,
             popup_open: false,
             overlay: None,
@@ -330,11 +353,13 @@ impl App {
             cw: COLLAPSED.0,
             system_notices: Default::default(),
             pill_motion: super::pill_motion::PillMotion {
+                content: None,
                 width: None,
                 intro: None,
+                intro_started: None,
                 intro_width: COLLAPSED.0,
                 gate: Default::default(),
-                track: (String::new(), String::new()),
+                track: (String::new(), String::new(), String::new()),
                 cover: intro_cover,
                 previous: previous_pill,
                 title: intro_title,
@@ -351,21 +376,18 @@ impl App {
             gpu,
             ears,
             collapsed,
+            progress_fill,
             expanded,
             cover_layer,
             cover_flight_until: None,
             liquid: Liquid {
                 ring,
                 highlight,
-                eq_shape,
-                eq_clip,
-                eq_key: std::cell::Cell::new(None),
                 pull: Default::default(),
                 pull_ready: false,
                 bump,
                 bump_fill,
                 bump_blur,
-                bump_shape,
                 round_clip,
                 body_clip,
                 body_shape,
@@ -380,8 +402,11 @@ impl App {
                 spectrum_brushes,
                 spectrum_running: false,
                 spectrum_scale: [0.0; audio::BANDS],
+                edge_values: std::cell::Cell::new([0.0; audio::BANDS]),
+                edge_time: std::cell::Cell::new(Instant::now()),
             },
             pet: Pet {
+                returning: None,
                 behavior: crate::ui::pet_behavior::PetBehavior::new(
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -390,6 +415,7 @@ impl App {
                 ),
                 speech: Default::default(),
                 speech_cue: Default::default(),
+                voice_phase: Default::default(),
                 motion: Default::default(),
                 controls_at: Instant::now(),
                 cursor: None,
@@ -407,6 +433,7 @@ impl App {
                 frame: 0,
             },
             pointer: Pointer {
+                expand_pending: Default::default(),
                 decoration_through: false,
                 tracking: false,
                 press: None,

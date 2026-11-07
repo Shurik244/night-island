@@ -4,7 +4,6 @@ use std::os::windows::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -451,7 +450,6 @@ pub enum State {
 }
 
 static STATE: Mutex<State> = Mutex::new(State::Idle);
-static BUSY: AtomicBool = AtomicBool::new(false);
 
 pub fn state() -> State {
     STATE.lock().map_or(State::Idle, |s| *s)
@@ -501,12 +499,12 @@ fn install_to(root: &Path) -> Result<(), &'static str> {
 }
 
 pub fn install(hwnd: HWND) -> bool {
-    if BUSY.swap(true, Ordering::SeqCst) {
+    if !wake_install::begin_install() {
         return false;
     }
     let Some(root) = wake::dir() else {
-        BUSY.store(false, Ordering::SeqCst);
         set(State::Failed("No profile folder"));
+        wake_install::end_install();
         return false;
     };
     let raw = hwnd.0 as isize;
@@ -516,7 +514,7 @@ pub fn install(hwnd: HWND) -> bool {
             Ok(()) => set(State::Ready),
             Err(why) => set(State::Failed(why)),
         }
-        BUSY.store(false, Ordering::SeqCst);
+        wake_install::end_install();
         unsafe {
             let _ = PostMessageW(Some(HWND(raw as *mut c_void)), WM_LOCAL_VOICE, WPARAM(0), LPARAM(0));
         }

@@ -84,6 +84,7 @@ mod hotkeys;
 mod input;
 mod liquid;
 mod lyric;
+mod memory_tools;
 mod motion;
 mod pet_studio;
 mod pill;
@@ -127,6 +128,7 @@ struct App {
     scale: f32,
     compositor: Compositor,
     geometry: CompositionRoundedRectangleGeometry,
+    open_motion: Option<motion::OpenMotion>,
     state: State,
     win: Win,
     pointer: Pointer,
@@ -181,6 +183,7 @@ struct App {
     liquid: Liquid,
     ears: [Layer; 2],
     collapsed: Layer,
+    progress_fill: Layer,
     expanded: Layer,
     cover_layer: Layer,
     cover_flight_until: Option<Instant>,

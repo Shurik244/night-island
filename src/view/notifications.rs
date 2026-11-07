@@ -42,6 +42,43 @@ pub enum NotificationsHit {
 
 pub const NOTIFICATION_SIZE: (f32, f32) = (420.0, 158.0);
 
+struct CardContent {
+    title_top: f32,
+    title_height: f32,
+    body_top: f32,
+    height: f32,
+}
+
+fn card_content(record: &Record, width: f32, scale: f32) -> CardContent {
+    let width = (width - 36.0 * scale).max(1.0);
+    let title_top = if record.avatar.is_some() { 62.0 } else { 54.0 } * scale;
+    let measure = |text: &str, size, weight, max: f32| {
+        if text.trim().is_empty() {
+            0.0
+        } else {
+            crate::ui::fonts::wrapped_height(text, width, size * scale, weight).min(max * scale)
+        }
+    };
+    let title_height = measure(&record.title, 15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, 44.0);
+    let body_height = measure(&record.body, 13.0, DWRITE_FONT_WEIGHT_NORMAL, 116.0);
+    let gap = if title_height > 0.0 && body_height > 0.0 { 6.0 * scale } else { 0.0 };
+    let body_top = title_top + title_height + gap;
+    CardContent { title_top, title_height, body_top, height: body_top + body_height + 16.0 * scale }
+}
+
+pub fn notification_card_height(record: &Record, width: f32, scale: f32) -> f32 {
+    card_content(record, width, scale).height
+}
+
+pub fn notification_card_width(record: &Record) -> f32 {
+    let font = crate::ui::fonts::selected();
+    let width = |text: &str, size, weight| crate::ui::fonts::width(font, text, size, weight);
+    (width(&record.body, 13.0, DWRITE_FONT_WEIGHT_NORMAL).max(width(&record.title, 15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD))
+        + 36.0)
+        .max(width(&record.app, 12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD) + 166.0)
+        .clamp(320.0, NOTIFICATION_SIZE.0)
+}
+
 pub fn notification_tile_count(ui: &UiState) -> usize {
     if ui.home.edit || ui.notifications.preview.is_none() {
         return 0;
@@ -169,6 +206,9 @@ fn paint_notification_detail(
         .zip(["Back", "Open sender app", "Dismiss"])
         .zip([NotificationsHit::Back, NotificationsHit::OpenApp, NotificationsHit::Dismiss])
     {
+        if hit == NotificationsHit::OpenApp && record.app_id == crate::platform::notifications::LOCAL_APP_ID {
+            continue;
+        }
         p.fill_round_rect(rect, 11.0 * scale, rgba(1.0, 1.0, 1.0, if ui.hover == Some(hit) { 0.14 } else { 0.07 }))?;
         p.text(label, rect, 12.0 * scale, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER, WHITE)?;
     }
@@ -198,11 +238,17 @@ pub fn hit_notifications(
     ui: &NotificationsUi,
     _open_app: bool,
 ) -> Option<NotificationsHit> {
-    if ui.full && ui.preview.is_some() {
+    if ui.full
+        && let Some(record) = &ui.preview
+    {
         return notification_detail_buttons(pill, scale)
             .into_iter()
             .zip([NotificationsHit::Back, NotificationsHit::OpenApp, NotificationsHit::Dismiss])
-            .find_map(|(rect, hit)| inside(rect, x, y).then_some(hit));
+            .find_map(|(rect, hit)| {
+                let available =
+                    hit != NotificationsHit::OpenApp || record.app_id != crate::platform::notifications::LOCAL_APP_ID;
+                (available && inside(rect, x, y)).then_some(hit)
+            });
     }
     for (rect, hit) in
         notification_sections(pill, scale).into_iter().zip([NotificationsHit::Setup, NotificationsHit::History])
@@ -267,7 +313,8 @@ pub fn paint_notification_card(
     record: &Record,
     pending: usize,
     hover_close: bool,
-) -> Result<()> {
+    scroll: Option<f32>,
+) -> Result<f32> {
     let (x, y, w, h) = rect;
     let size = if record.avatar.is_some() { 40.0 } else { 32.0 } * scale;
     let icon = (x + 18.0 * scale, y + 14.0 * scale, x + 18.0 * scale + size, y + 14.0 * scale + size);
@@ -295,16 +342,30 @@ pub fn paint_notification_card(
         p.fill_round_rect(close, 15.0 * scale, rgba(1.0, 1.0, 1.0, 0.1))?;
     }
     p.glyph('\u{E711}', close, 10.0 * scale, rgba(1.0, 1.0, 1.0, 0.55))?;
-    p.text(
+    let layout = card_content(record, w, scale);
+    p.text_wrapped_trimmed(
         &record.title,
-        (x + 18.0 * scale, y + 54.0 * scale, x + w - 18.0 * scale, y + 80.0 * scale),
+        (x + 18.0 * scale, y + layout.title_top, x + w - 18.0 * scale, y + layout.title_top + layout.title_height),
         15.0 * scale,
         DWRITE_FONT_WEIGHT_SEMI_BOLD,
-        DWRITE_TEXT_ALIGNMENT_LEADING,
         WHITE,
     )?;
-    let body = (x + 18.0 * scale, y + 84.0 * scale, x + w - 18.0 * scale, y + h - 16.0 * scale);
-    p.text_wrapped_trimmed(&record.body, body, 13.0 * scale, DWRITE_FONT_WEIGHT_NORMAL, rgba(1.0, 1.0, 1.0, 0.72))
+    let body_bottom = y + h - 16.0 * scale;
+    let body = (x + 18.0 * scale, (y + layout.body_top).min(body_bottom - scale), x + w - 18.0 * scale, body_bottom);
+    let color = rgba(1.0, 1.0, 1.0, 0.72);
+    if let Some(scroll) = scroll {
+        let max = p.text_scrolled(&record.body, body, 13.0 * scale, scroll, color)?;
+        if max > 0.0 {
+            let height = body.3 - body.1;
+            let thumb = (height * height / (height + max)).max(12.0 * scale);
+            let top = body.1 + (height - thumb) * scroll.clamp(0.0, max) / max;
+            p.fill_round_rect((body.2 + 3.0 * scale, top, body.2 + 6.0 * scale, top + thumb), scale, color)?;
+        }
+        Ok(max)
+    } else {
+        p.text_wrapped_trimmed(&record.body, body, 13.0 * scale, DWRITE_FONT_WEIGHT_NORMAL, color)?;
+        Ok(0.0)
+    }
 }
 
 pub fn notification_status(status: Status) -> &'static str {
@@ -474,6 +535,41 @@ mod tile_tests {
             icon: None,
             avatar: None,
         }
+    }
+
+    #[test]
+    fn notification_cards_follow_wrapping_font_and_content_length() {
+        let selected = crate::ui::fonts::selected();
+        for font in crate::data::settings::InterfaceFont::ALL {
+            crate::ui::fonts::set(font);
+            for scale in [0.75, 1.0, 1.25, 1.5, 2.0] {
+                let mut record = message();
+                record.app = "Night Island".into();
+                record.title = "Ассистент".into();
+                record.body = "Музыка на паузе.".into();
+                let width = notification_card_width(&record) * scale;
+                let short = notification_card_height(&record, width, scale);
+                assert!(short < NOTIFICATION_SIZE.1 * scale);
+                assert!(width < NOTIFICATION_SIZE.0 * scale);
+                let content = card_content(&record, width, scale);
+                let measured = crate::ui::fonts::wrapped_height(
+                    &record.body,
+                    width - 36.0 * scale,
+                    13.0 * scale,
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                );
+                assert!(content.height - content.body_top - 16.0 * scale >= measured - 0.01);
+                record.body = "Первая строка.\nВторая строка.\nТретья строка.".into();
+                let multiline = notification_card_height(&record, width, scale);
+                assert!(multiline > short);
+                record.body = "Подробный ответ ассистента с пояснениями. ".repeat(100);
+                let long = notification_card_height(&record, width, scale);
+                assert!(long > multiline && long <= 238.0 * scale);
+                record.body.clear();
+                assert!(notification_card_height(&record, width, scale) < short);
+            }
+        }
+        crate::ui::fonts::set(selected);
     }
 
     #[test]

@@ -20,6 +20,13 @@ pub fn level(band: usize) -> f32 {
     LEVELS.get(band).map_or(0.0, |l| f32::from_bits(l.load(Ordering::Relaxed)))
 }
 
+#[cfg(test)]
+pub fn debug_levels(values: [f32; BANDS]) {
+    for (level, value) in LEVELS.iter().zip(values) {
+        level.store(value.to_bits(), Ordering::Relaxed);
+    }
+}
+
 pub fn start() {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return;

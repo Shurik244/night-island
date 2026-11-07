@@ -3,6 +3,7 @@ use crate::view::*;
 pub fn content_tip(pill: Rect, scale: f32, ui: &UiState, clips: usize, px: f32, py: f32) -> Option<(String, Rect)> {
     match ui.tab {
         Tab::Home => home_tip(pill, scale, ui, px, py),
+        Tab::Yandex => yandex_tip(pill, scale, &ui.yandex, px, py),
         Tab::Note => {
             let tree = note_tree(pill, scale);
             let reminder = ui.notes.remind.is_some();

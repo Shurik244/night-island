@@ -11,6 +11,7 @@ pub struct PetStudio {
     pub text_only: bool,
     pub pending: bool,
     pub draft: Option<PetDesign>,
+    pub source: PetDesign,
     pub files: Vec<Attachment>,
     pub error: Option<String>,
     pub applied: bool,
@@ -20,6 +21,7 @@ pub struct PetStudio {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PetStudioHit {
+    Body,
     Apply,
     Photo,
     TextOnly,
@@ -27,8 +29,10 @@ pub enum PetStudioHit {
 
 impl PetStudio {
     pub fn preview_interval(&self) -> Option<u32> {
-        (self.enabled && self.performance != crate::ui::pet_motion::PetPerformance::Still)
-            .then(|| self.performance.interval(false, false, false))
+        (self.enabled
+            && self.performance != crate::ui::pet_motion::PetPerformance::Still
+            && crate::ui::feedback::motion_allowed())
+        .then(|| self.performance.interval(false, false, false))
     }
 }
 
@@ -48,6 +52,9 @@ pub fn hit_pet_studio(area: Rect, scale: f32, point: (f32, f32), studio: &PetStu
     if studio.pending {
         return None;
     }
+    if inside(pet_body_button(area, scale), point.0, point.1) {
+        return Some(PetStudioHit::Body);
+    }
     pet_studio_buttons(area, scale)
         .into_iter()
         .zip([PetStudioHit::Apply, PetStudioHit::Photo, PetStudioHit::TextOnly])
@@ -56,6 +63,10 @@ pub fn hit_pet_studio(area: Rect, scale: f32, point: (f32, f32), studio: &PetStu
                 && (action != PetStudioHit::Apply || (studio.draft.is_some() && !studio.applied)))
                 .then_some(action)
         })
+}
+
+fn pet_body_button(area: Rect, scale: f32) -> Rect {
+    (area.0 + 8.0 * scale, area.3 - 72.0 * scale, area.0 + 126.0 * scale, area.3 - 46.0 * scale)
 }
 
 pub fn paint_pet_studio(
@@ -68,10 +79,10 @@ pub fn paint_pet_studio(
 ) -> Result<()> {
     let (l, t, r, b) = area;
     let card = (l, t, r, b - 44.0 * scale);
-    let height = (card.3 - t).max(1.0);
+    let height = (card.3 - t - 28.0 * scale).max(1.0);
     let size = (height - 8.0 * scale).min(162.0 * scale).min((r - l) * 0.43).max(36.0 * scale);
     let top = t + (height - size) / 2.0;
-    let design = studio.draft.as_ref().unwrap_or_else(|| PetDesign::bear());
+    let design = studio.draft.as_ref().unwrap_or(&studio.source);
     let tint = design.fur.map(|v| f32::from(v) / 255.0);
     p.fill_round_gradient(card, 18.0 * scale, rgba(tint[0], tint[1], tint[2], 0.16), rgba(1.0, 1.0, 1.0, 0.035))?;
     p.stroke_round_rect(card, 18.0 * scale, scale, rgba(1.0, 1.0, 1.0, 0.065))?;
@@ -86,7 +97,7 @@ pub fn paint_pet_studio(
         )?;
         p.text_wrapped_trimmed(
             &crate::ui::i18n::tr(error),
-            (l + 16.0 * scale, t + 38.0 * scale, r - 16.0 * scale, card.3 - 10.0 * scale),
+            (l + 16.0 * scale, t + 38.0 * scale, r - 16.0 * scale, card.3 - 36.0 * scale),
             11.5 * scale,
             DWRITE_FONT_WEIGHT_NORMAL,
             rgba(1.0, 0.85, 0.79, 0.93),
@@ -139,8 +150,7 @@ pub fn paint_pet_studio(
         p.set_transform(&old);
         drawn?;
         if let Some(reference) = &studio.reference {
-            let side = 30.0 * scale;
-            let photo = (l + 10.0 * scale, card.3 - side - 9.0 * scale, l + side + 10.0 * scale, card.3 - 9.0 * scale);
+            let photo = (l + 134.0 * scale, card.3 - 29.0 * scale, l + 160.0 * scale, card.3 - 3.0 * scale);
             p.image(photo, 8.0 * scale, reference.side, &reference.bgra)?;
             p.stroke_round_rect(photo, 8.0 * scale, scale, rgba(1.0, 1.0, 1.0, 0.3))?;
             if studio.text_only {
@@ -239,6 +249,17 @@ pub fn paint_pet_studio(
             }
         }
     }
+    let body_button = pet_body_button(area, scale);
+    let hot = hover == Some(PetStudioHit::Body) || focus == Some(PetStudioHit::Body);
+    p.fill_round_rect(body_button, 9.0 * scale, rgba(1.0, 1.0, 1.0, if hot { 0.14 } else { 0.07 }))?;
+    p.text(
+        &format!("{}: {} ›", crate::ui::i18n::tr("Body"), crate::ui::i18n::tr(design.body.name())),
+        (body_button.0 + 8.0 * scale, body_button.1, body_button.2 - 4.0 * scale, body_button.3),
+        10.5 * scale,
+        DWRITE_FONT_WEIGHT_NORMAL,
+        DWRITE_TEXT_ALIGNMENT_LEADING,
+        rgba(1.0, 1.0, 1.0, if studio.pending { 0.35 } else { 0.85 }),
+    )?;
     for (i, (rect, action)) in pet_studio_buttons(area, scale)
         .into_iter()
         .zip([PetStudioHit::Apply, PetStudioHit::Photo, PetStudioHit::TextOnly])
@@ -313,6 +334,33 @@ pub fn paint_pet_studio(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_character_and_manual_body_choice_do_not_require_an_ai_request() {
+        use crate::ui::{characters::Character, pet_design::PetBody};
+        for (character, body) in
+            [(Character::Cat, PetBody::Cat), (Character::Robot, PetBody::Robot), (Character::Spark, PetBody::Ghost)]
+        {
+            let studio = PetStudio {
+                enabled: true,
+                source: PetDesign::for_character(character, &PetDesign::default()),
+                ..Default::default()
+            };
+            assert_eq!(studio.source.body, body);
+            let area = (0.0, 0.0, 400.0, 240.0);
+            let rect = pet_body_button(area, 1.0);
+            assert_eq!(hit_pet_studio(area, 1.0, (rect.0 + 10.0, rect.1 + 10.0), &studio), Some(PetStudioHit::Body));
+            assert!(rect.3 < pet_studio_buttons(area, 1.0)[0].1);
+        }
+        let mut body = PetBody::Bear;
+        let mut seen = Vec::new();
+        for _ in 0..6 {
+            seen.push(body);
+            body = body.next();
+        }
+        assert_eq!(seen, PetBody::ALL);
+        assert_eq!(body, PetBody::Bear);
+    }
 
     #[test]
     fn preview_animation_stops_when_closed_or_reduced_and_respects_the_pet_budget() {

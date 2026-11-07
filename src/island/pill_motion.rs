@@ -1,8 +1,10 @@
 use crate::island::*;
 
 pub(in crate::island) const WIDTH_MS: u64 = 360;
-const INTRO_HOLD_MS: u32 = 1250;
-const INTRO_RETURN_MS: u64 = 440;
+const INTRO_HOLD_MS: u32 = 1700;
+pub(in crate::island) const REVEAL_MS: u64 = 720;
+const INTRO_RETURN_MS: u64 = 680;
+const OUTGOING_MS: u32 = 280;
 
 #[derive(Clone, Copy)]
 pub(in crate::island) struct WidthTween {
@@ -10,11 +12,12 @@ pub(in crate::island) struct WidthTween {
     pub to: view::Rect,
     pub room: f32,
     pub start: Instant,
+    pub duration: u64,
 }
 
 impl WidthTween {
     pub fn at(&self, now: Instant) -> view::Rect {
-        let t = now.saturating_duration_since(self.start).as_secs_f32() / (WIDTH_MS as f32 / 1000.0);
+        let t = now.saturating_duration_since(self.start).as_secs_f32() / (self.duration.max(1) as f32 / 1000.0);
         let p = crate::ui::anim::ease(crate::data::settings::AnimCurve::Smooth, t);
         let lerp = |a: f32, b: f32| a + (b - a) * p;
         (
@@ -28,6 +31,7 @@ impl WidthTween {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::island) enum IntroPhase {
+    Fading,
     Present,
     Returning,
 }
@@ -48,15 +52,39 @@ impl MusicEntranceGate {
 }
 
 pub(in crate::island) struct PillMotion {
+    pub content: Option<PillContent>,
     pub width: Option<WidthTween>,
     pub intro: Option<IntroPhase>,
+    pub intro_started: Option<Instant>,
     pub intro_width: f32,
     pub gate: MusicEntranceGate,
-    pub track: (String, String),
+    pub track: (String, String, String),
     pub cover: Layer,
     pub previous: Layer,
     pub title: Layer,
     pub title_clip: windows::UI::Composition::InsetClip,
+}
+
+#[derive(PartialEq, Eq)]
+pub(in crate::island) enum PillContent {
+    Notice(char, String),
+    Volume,
+    Download(String),
+    Normal,
+}
+
+impl PillContent {
+    pub fn current(ui: &view::UiState) -> Self {
+        if let Some((glyph, text)) = &ui.notice {
+            Self::Notice(*glyph, text.clone())
+        } else if ui.volume.is_some() {
+            Self::Volume
+        } else if let Some(name) = &ui.downloading {
+            Self::Download(name.clone())
+        } else {
+            Self::Normal
+        }
+    }
 }
 
 impl App {
@@ -129,6 +157,14 @@ impl App {
     }
 
     pub(in crate::island) fn maybe_start_music_intro(&mut self) {
+        let track = (self.ui.media.title.clone(), self.ui.media.artist.clone(), self.ui.media.source.clone());
+        if self.settings.music_track_intro && (!self.ui.media.playing || self.pill_motion.track != track) {
+            self.pill_motion.gate = Default::default();
+        }
+        self.pill_motion.track = track;
+        if !self.settings.island_animations || !crate::ui::feedback::motion_allowed() {
+            return;
+        }
         let visible = !self.notification_card_visible()
             && self.state == State::Collapsed
             && !self.pill_hidden
@@ -140,9 +176,37 @@ impl App {
         if !self.pill_motion.gate.take(self.ui.media.playing, !self.ui.media.title.trim().is_empty(), visible) {
             return;
         }
-        self.pill_motion.track = (self.ui.media.title.clone(), self.ui.media.source.clone());
+        if self.pill_motion.intro == Some(IntroPhase::Fading) {
+            return;
+        }
+        if self.pill_motion.intro.is_none() {
+            self.pill_motion.intro = Some(IntroPhase::Fading);
+            self.pill_motion.intro_width = self.cw;
+            self.kill_timer(Timer::Autohide);
+            let _ = self.intro_alpha(&self.collapsed.sprite, 1.0, 0.0, 0.0, u64::from(OUTGOING_MS));
+            if !self.settings.pet_music_curiosity {
+                let _ = self.intro_alpha(&self.pet.char_layer.sprite, 1.0, 0.0, 0.0, u64::from(OUTGOING_MS));
+            }
+            self.update_weather_timer();
+            self.set_timer(Timer::MusicIntro, OUTGOING_MS + 20);
+            return;
+        }
+        self.start_music_reveal();
+    }
+
+    fn start_music_reveal(&mut self) {
+        self.ui.track_in_flight = true;
         self.pill_motion.intro = Some(IntroPhase::Present);
-        self.pill_motion.intro_width = view::collapsed_width(&self.ui, COLLAPSED.0).max(340.0);
+        let work = self.island_work_area();
+        let room = if self.settings.vertical() { work.3 - work.1 } else { work.2 - work.0 };
+        self.pill_motion.intro_width = view::music_entrance_width(&self.ui).min((room / self.scale - 32.0).max(100.0));
+        for sprite in [&self.pill_motion.cover.sprite, &self.pill_motion.title.sprite] {
+            let _ = sprite.StopAnimation(h!("Opacity"));
+            let _ = sprite.SetOpacity(0.0);
+            let _ = sprite.StopAnimation(h!("Scale"));
+        }
+        let _ = self.collapsed.sprite.StopAnimation(h!("Opacity"));
+        let _ = self.collapsed.sprite.SetOpacity(0.0);
         self.kill_timer(Timer::Autohide);
         let _ = self.pill_motion.previous.sprite.SetIsVisible(false);
         self.reset_liquid_pull();
@@ -150,31 +214,75 @@ impl App {
         self.repaint_collapsed();
         self.place_music_intro();
         self.refresh_music_intro();
-        let full = Vector3 { X: 1.0, Y: 1.0, Z: 1.0 };
-        for sprite in [&self.pill_motion.cover.sprite, &self.pill_motion.title.sprite] {
-            let _ = sprite.StopAnimation(h!("Scale"));
-            let _ = sprite.SetScale(full);
-            let _ = sprite.SetIsVisible(true);
-            let target = sprite.Offset().unwrap_or_default();
-            let _ = self.animate_pill_vector(
-                sprite,
-                h!("Offset"),
-                Vector3 { Y: target.Y + 6.0 * self.scale, ..target },
-                target,
-                WIDTH_MS,
-            );
-            let _ = self.intro_alpha(sprite, 0.0, 1.0, 0.1, WIDTH_MS);
+        self.pill_motion.intro_started = Some(Instant::now());
+        let layout = self.intro_layout();
+        let pill = self.pill_rect(false);
+        let center = view::music_entrance_cover_at(pill, self.scale, &self.ui, 0.0);
+        let delta = (center.0 - layout.cover.0, center.1 - layout.cover.1);
+        let shifted_title =
+            (layout.title.0 + delta.0, layout.title.1 + delta.1, layout.title.2 + delta.0, layout.title.3 + delta.1);
+        let easing = self.ease();
+        if let Ok(easing) = easing {
+            for (sprite, from, to) in [
+                (
+                    &self.pill_motion.cover.sprite,
+                    Vector3 { X: center.0, Y: center.1, Z: 0.0 },
+                    Vector3 { X: layout.cover.0, Y: layout.cover.1, Z: 0.0 },
+                ),
+                (
+                    &self.pill_motion.title.sprite,
+                    self.title_position(shifted_title, 1.0),
+                    self.title_position(layout.title, 1.0),
+                ),
+            ] {
+                let _ = sprite.SetScale(Vector3 { X: 1.0, Y: 1.0, Z: 1.0 });
+                if let Ok(animation) = self.compositor.CreateVector3KeyFrameAnimation() {
+                    let _ = animation.InsertKeyFrame(0.0, from);
+                    let _ = animation.InsertKeyFrame(0.24, from);
+                    let _ = animation.InsertKeyFrameWithEasingFunction(1.0, to, &easing);
+                    let _ = animation.SetDuration(Duration::from_millis(REVEAL_MS).into());
+                    let _ = sprite.StartAnimation(h!("Offset"), &animation);
+                }
+                let _ = sprite.SetIsVisible(true);
+            }
+            let length = if self.settings.vertical() {
+                layout.title.3 - layout.title.1
+            } else {
+                layout.title.2 - layout.title.0
+            };
+            if let Ok(clip) = self.compositor.CreateScalarKeyFrameAnimation() {
+                let _ = clip.InsertKeyFrame(0.0, 240.0 * self.scale);
+                let _ = clip.InsertKeyFrame(0.24, 240.0 * self.scale);
+                let _ = clip.InsertKeyFrameWithEasingFunction(1.0, (240.0 * self.scale - length).max(0.0), &easing);
+                let _ = clip.SetDuration(Duration::from_millis(REVEAL_MS).into());
+                let _ = self.pill_motion.title_clip.StartAnimation(h!("RightInset"), &clip);
+            }
         }
-        let _ = self.pill_motion.title_clip.StopAnimation(h!("RightInset"));
-        let _ = self.pill_motion.title_clip.SetRightInset(0.0);
-        let _ = self.intro_alpha(&self.collapsed.sprite, 1.0, 0.0, 0.0, 160);
-        let _ = self.intro_alpha(&self.pet.char_layer.sprite, 1.0, 0.0, 0.0, 160);
+        let cover = &self.pill_motion.cover.sprite;
+        let _ = cover.SetCenterPoint(Vector3 { X: 14.0 * self.scale, Y: 14.0 * self.scale, Z: 0.0 });
+        let _ = self.animate_pill_vector(
+            cover,
+            h!("Scale"),
+            Vector3 { X: 0.72, Y: 0.72, Z: 1.0 },
+            Vector3 { X: 1.0, Y: 1.0, Z: 1.0 },
+            260,
+        );
+        let _ = self.intro_alpha(cover, 0.0, 1.0, 0.0, 260);
+        let _ = self.intro_alpha(&self.pill_motion.title.sprite, 0.0, 1.0, 0.28, REVEAL_MS);
+        if !self.settings.pet_music_curiosity {
+            let _ = self.pet.char_layer.sprite.StopAnimation(h!("Opacity"));
+            let _ = self.pet.char_layer.sprite.SetOpacity(0.0);
+        }
+        self.pet.char_key = None;
+        self.set_timer(Timer::Char, 1);
         self.set_timer(Timer::MusicIntro, INTRO_HOLD_MS);
     }
 
     pub(in crate::island) fn music_intro_step(&mut self) {
         match self.pill_motion.intro {
+            Some(IntroPhase::Fading) => self.start_music_reveal(),
             Some(IntroPhase::Present) => {
+                let _ = self.pill_motion.cover.sprite.SetCenterPoint(Vector3::default());
                 let origin = self.window_origin(Win::Small);
                 let cover_from = self.pill_motion.cover.sprite.Offset().unwrap_or_default();
                 let title_from = self.pill_motion.title.sprite.Offset().unwrap_or_default();
@@ -208,7 +316,7 @@ impl App {
                     },
                     INTRO_RETURN_MS,
                 );
-                let ratio = 12.5 / 15.0;
+                let ratio = if self.settings.pill_unified_layout { 13.0 / 15.0 } else { 12.5 / 15.0 };
                 let title = layout.final_title.unwrap_or(layout.title);
                 let title_to = self.title_position(title, ratio);
                 let _ = self.animate_pill_vector(
@@ -231,23 +339,22 @@ impl App {
                     let _ = clip.SetDuration(Duration::from_millis(INTRO_RETURN_MS).into());
                     let _ = self.pill_motion.title_clip.StartAnimation(h!("RightInset"), &clip);
                 }
-                for sprite in [&self.pill_motion.cover.sprite, &self.pill_motion.title.sprite] {
-                    let _ = self.intro_alpha(sprite, 1.0, 0.0, 0.65, INTRO_RETURN_MS);
+                if layout.final_cover.is_none() {
+                    let _ = self.intro_alpha(&self.pill_motion.cover.sprite, 1.0, 0.0, 0.3, INTRO_RETURN_MS);
+                }
+                if layout.final_title.is_none() {
+                    let _ = self.intro_alpha(&self.pill_motion.title.sprite, 1.0, 0.0, 0.3, INTRO_RETURN_MS);
                 }
                 for sprite in [&self.collapsed.sprite, &self.pet.char_layer.sprite] {
-                    let _ = self.intro_alpha(sprite, 0.0, 1.0, 0.55, INTRO_RETURN_MS);
+                    if sprite != &self.pet.char_layer.sprite || !self.settings.pet_music_curiosity {
+                        let _ = self.intro_alpha(sprite, 0.0, 1.0, 0.55, INTRO_RETURN_MS);
+                    }
                 }
                 self.set_timer(Timer::MusicIntro, INTRO_RETURN_MS as u32 + 30);
             }
             Some(IntroPhase::Returning) => {
                 self.pill_motion.intro = None;
-                for sprite in [&self.pill_motion.cover.sprite, &self.pill_motion.title.sprite] {
-                    let _ = sprite.SetIsVisible(false);
-                    for name in [h!("Offset"), h!("Scale"), h!("Opacity")] {
-                        let _ = sprite.StopAnimation(name);
-                    }
-                }
-                let _ = self.pill_motion.title_clip.StopAnimation(h!("RightInset"));
+                self.ui.track_in_flight = false;
                 for sprite in [&self.collapsed.sprite, &self.pet.char_layer.sprite] {
                     let _ = sprite.StopAnimation(h!("Opacity"));
                     let _ = sprite.SetOpacity(1.0);
@@ -255,6 +362,13 @@ impl App {
                 self.width_motion_done();
                 self.update_eq();
                 self.repaint_collapsed();
+                for sprite in [&self.pill_motion.cover.sprite, &self.pill_motion.title.sprite] {
+                    let _ = sprite.SetIsVisible(false);
+                    for name in [h!("Offset"), h!("Scale"), h!("Opacity")] {
+                        let _ = sprite.StopAnimation(name);
+                    }
+                }
+                let _ = self.pill_motion.title_clip.StopAnimation(h!("RightInset"));
                 self.update_weather_timer();
                 self.schedule_autohide();
             }
@@ -267,12 +381,14 @@ impl App {
     }
 
     pub(in crate::island) fn stop_pill_attachment_motion(&self) {
-        for sprite in std::iter::once(&self.pet.char_layer.sprite)
-            .chain(self.music.spectrum.iter())
-            .chain(self.ears.iter().map(|ear| &ear.sprite))
-        {
+        let _ = self.collapsed.sprite.StopAnimation(h!("Offset"));
+        for sprite in std::iter::once(&self.pet.char_layer.sprite).chain(self.music.spectrum.iter()) {
             let _ = sprite.StopAnimation(h!("Offset"));
         }
+    }
+
+    pub(in crate::island) fn width_motion_ms(&self) -> u64 {
+        if self.pill_motion.intro == Some(IntroPhase::Returning) { INTRO_RETURN_MS } else { WIDTH_MS }
     }
 
     pub(in crate::island) fn width_room(&self) -> f32 {
@@ -307,14 +423,14 @@ impl App {
         for (name, target) in [(h!("Offset"), at), (h!("Size"), size)] {
             let animation = self.compositor.CreateVector2KeyFrameAnimation()?;
             animation.InsertKeyFrameWithEasingFunction(1.0, target, &easing)?;
-            animation.SetDuration(Duration::from_millis(WIDTH_MS).into())?;
+            animation.SetDuration(Duration::from_millis(self.width_motion_ms()).into())?;
             self.geometry.StartAnimation(name, &animation)?;
         }
         Ok(())
     }
 
     pub(in crate::island) fn width_motion_done(&mut self) {
-        if self.pill_motion.intro == Some(IntroPhase::Returning) {
+        if matches!(self.pill_motion.intro, Some(IntroPhase::Present | IntroPhase::Returning)) {
             return;
         }
         if self.pill_motion.width.take().is_none() || self.state != State::Collapsed {
@@ -327,14 +443,12 @@ impl App {
             let _ = self.collapsed.sprite.SetOpacity(1.0);
         }
         self.stop_pill_attachment_motion();
+        self.set_decoration_through(false);
         self.place(Win::Small);
         for name in [h!("Offset"), h!("Size")] {
             let _ = self.geometry.StopAnimation(name);
         }
         let _ = self.set_geometry_now(Win::Small, false, false);
-        if self.pill_motion.intro == Some(IntroPhase::Present) {
-            self.place_music_intro();
-        }
         self.start_liquid();
         self.maybe_show_notification();
     }
@@ -345,6 +459,8 @@ impl App {
         }
         self.kill_timer(Timer::WidthMotion);
         self.kill_timer(Timer::MusicIntro);
+        self.ui.track_in_flight = false;
+        self.set_decoration_through(false);
         self.pill_motion.intro = None;
         self.pill_motion.width = None;
         self.stop_pill_attachment_motion();
@@ -405,7 +521,7 @@ mod tests {
             ((900.0, 8.0, 200.0, 34.0), (750.0, 8.0, 500.0, 34.0)),
             ((0.0, 200.0, 42.0, 200.0), (0.0, 50.0, 42.0, 500.0)),
         ] {
-            let tween = WidthTween { from, to, room: 500.0, start };
+            let tween = WidthTween { from, to, room: 500.0, start, duration: WIDTH_MS };
             for ms in (0..=360).step_by(15) {
                 let frame = tween.at(start + Duration::from_millis(ms));
                 assert!(frame.0 >= from.0.min(to.0) - 0.01);
@@ -415,7 +531,7 @@ mod tests {
             }
             let now = start + Duration::from_millis(135);
             let visible = tween.at(now);
-            let retarget = WidthTween { from: visible, to: from, room: 500.0, start: now };
+            let retarget = WidthTween { from: visible, to: from, room: 500.0, start: now, duration: WIDTH_MS };
             let first = retarget.at(now);
             assert!((first.0 - visible.0).abs() < 0.01 && (first.2 - visible.2).abs() < 0.01);
             assert!((retarget.at(now + Duration::from_secs(1)).2 - from.2).abs() < 0.01);
@@ -484,7 +600,18 @@ mod tests {
                     dock_edge: edge,
                     music_eq: false,
                     edge_spikes: false,
-                    pill_battery: crate::data::settings::BatteryStyle::Hidden,
+                    music_cover: style == Style::Flat,
+                    music_title: style == Style::Flat,
+                    pill_battery: if style == Style::Liquid {
+                        crate::data::settings::BatteryStyle::Percent
+                    } else {
+                        crate::data::settings::BatteryStyle::Hidden
+                    },
+                    metrics_pill: if style == Style::Liquid {
+                        ["cpu", "ram", "gpu"].map(String::from).to_vec()
+                    } else {
+                        Vec::new()
+                    },
                     ..Settings::default()
                 };
                 let mut app = App::new_visuals(hwnd, 1.0, settings)?;
@@ -499,7 +626,19 @@ mod tests {
                     cover: media::debug_cover(8, &[100, 80, 180, 255].repeat(64)),
                     ..Default::default()
                 };
+                if style == Style::Liquid {
+                    app.ui.metrics.pill = "CPU  23%  RAM  64%  GPU  41%".into();
+                    app.ui.privacy.mic = true;
+                    app.ui.privacy.cam = true;
+                }
+                app.repaint_collapsed();
+                app.width_motion_done();
+                let before_fade = (app.cw, app.collapsed.size());
                 app.maybe_start_music_intro();
+                assert!(app.pill_motion.intro == Some(IntroPhase::Fading));
+                app.repaint_collapsed();
+                assert_eq!((app.cw, app.collapsed.size()), before_fade);
+                app.music_intro_step();
                 assert!(app.pill_motion.intro == Some(IntroPhase::Present));
                 if style == Style::Flat
                     && edge == Edge::Top
@@ -516,11 +655,64 @@ mod tests {
                 app.width_motion_done();
                 app.music_intro_step();
                 assert!(app.pill_motion.intro == Some(IntroPhase::Returning));
+                assert_eq!(app.pill_motion.width.unwrap().duration, INTRO_RETURN_MS);
+                assert!(app.ui.track_in_flight);
                 app.music_intro_step();
+                assert!(!app.ui.track_in_flight);
                 assert!(!app.pill_motion_busy());
                 assert!(!app.pill_motion.cover.sprite.IsVisible()? && !app.pill_motion.title.sprite.IsVisible()?);
                 assert_eq!(app.collapsed.sprite.Opacity()?, 1.0);
                 app.maybe_start_music_intro();
+                if app.pill_motion.intro == Some(IntroPhase::Fading) {
+                    app.music_intro_step();
+                }
+                assert!(app.pill_motion.intro.is_none());
+                if style == Style::Liquid {
+                    app.start_idle();
+                    assert!(app.liquid.idle_running && app.liquid.body_active.get());
+                    app.stop_idle();
+                    app.settings.liquid_idle_travel = false;
+                    app.start_idle();
+                    assert!(app.liquid.idle_running && app.liquid.body_active.get());
+                    app.stop_idle();
+                    app.settings.liquid_idle_travel = true;
+                }
+                app.ui.media.title = "A different track".into();
+                app.maybe_start_music_intro();
+                if app.pill_motion.intro == Some(IntroPhase::Fading) {
+                    app.music_intro_step();
+                }
+                assert!(app.pill_motion.intro == Some(IntroPhase::Present));
+                let visible = app.pill_motion.width.unwrap().at(Instant::now());
+                app.ui.media.title = "Switched again immediately".into();
+                app.maybe_start_music_intro();
+                if app.pill_motion.intro == Some(IntroPhase::Fading) {
+                    app.music_intro_step();
+                }
+                assert!((app.pill_motion.width.unwrap().from.2 - visible.2).abs() < 10.0);
+                assert!(app.pill_motion.intro == Some(IntroPhase::Present));
+                app.music_intro_step();
+                app.music_intro_step();
+                app.settings.music_track_intro = false;
+                app.ui.media.title = "Legacy behavior".into();
+                app.maybe_start_music_intro();
+                if app.pill_motion.intro == Some(IntroPhase::Fading) {
+                    app.music_intro_step();
+                }
+                assert!(app.pill_motion.intro.is_none());
+                app.settings.music_track_intro = true;
+                app.ui.notice = Some(('!', "Busy".into()));
+                app.ui.media.title = "Started while a message was visible".into();
+                app.maybe_start_music_intro();
+                if app.pill_motion.intro == Some(IntroPhase::Fading) {
+                    app.music_intro_step();
+                }
+                assert!(app.pill_motion.intro.is_none());
+                app.ui.notice = None;
+                app.maybe_start_music_intro();
+                if app.pill_motion.intro == Some(IntroPhase::Fading) {
+                    app.music_intro_step();
+                }
                 assert!(app.pill_motion.intro.is_none());
                 app.ui.notice = Some(('\u{E722}', "A longer notification that expands the island".into()));
                 app.repaint_collapsed();
@@ -544,12 +736,73 @@ mod tests {
                 app.cancel_pill_motion();
                 assert!(!app.pill_motion_busy());
                 assert!(!app.pill_motion.previous.sprite.IsVisible()?);
-                assert_eq!(
-                    app.window_size(Win::Small),
-                    window_size(app.scale, Win::Small, app.docked(), app.cw, &window_room(&app.settings))
-                );
+                assert_eq!(app.window_size(Win::Small), app.window_size(Win::Big));
+                assert_eq!(app.window_origin(Win::Small), app.window_origin(Win::Big));
+                app.ui.notice = Some(('!', "Copied".into()));
+                app.repaint_collapsed();
+                app.width_motion_done();
+                let width = app.cw;
+                app.ui.notice = Some(('?', "Copied".into()));
+                app.repaint_collapsed();
+                assert_eq!(app.cw, width);
+                assert!(app.pill_motion.width.is_some());
+                assert!(app.pill_motion.previous.sprite.IsVisible()?);
+                app.width_motion_done();
+                app.ui.notice = None;
+                app.ui.volume = Some(0.4);
+                app.repaint_collapsed();
+                app.width_motion_done();
+                app.ui.volume = Some(0.5);
+                app.repaint_collapsed();
+                assert!(app.pill_motion.width.is_none());
+                app.ui.volume = None;
+                app.repaint_collapsed();
+                assert!(app.pill_motion.previous.sprite.IsVisible()?);
+                app.width_motion_done();
+                app.settings.island_animations = false;
+                app.ui.notice = Some(('!', "Copied".into()));
+                app.repaint_collapsed();
+                assert!(app.pill_motion.width.is_none());
+                assert!(!app.pill_motion.previous.sprite.IsVisible()?);
+                app.ui.notice = None;
+                app.repaint_collapsed();
+                app.settings.island_animations = true;
+                if float_pos.is_none() {
+                    app.settings.character = Character::Spark;
+                    app.set_character_detached(true);
+                    let from = app.pet.desktop.as_ref().unwrap().center();
+                    app.begin_pet_return();
+                    assert!(app.pet.returning.is_some());
+                    assert!(app.pet.desktop.is_some());
+                    app.pet.returning.as_mut().unwrap().start = Instant::now() - Duration::from_millis(260);
+                    app.char_tick();
+                    let center = app.pet.desktop.as_ref().unwrap().center();
+                    assert!(center.0.is_finite() && center.1.is_finite());
+                    assert_ne!(from, center);
+                    let hwnd = app.pet.desktop.as_ref().unwrap().hwnd();
+                    assert_ne!(unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } & WS_EX_TRANSPARENT.0 as isize, 0);
+                    app.pet.returning.as_mut().unwrap().start = Instant::now() - Duration::from_millis(600);
+                    app.char_tick();
+                    assert!(app.pet.returning.is_none() && app.pet.desktop.is_none());
+                    assert!(!app.settings.character_detached);
+                    app.set_character_detached(true);
+                    app.begin_pet_return();
+                    app.char_tick();
+                    app.pill_hidden = true;
+                    app.char_tick();
+                    assert!(app.pet.returning.is_none() && app.pet.desktop.is_some());
+                    let hwnd = app.pet.desktop.as_ref().unwrap().hwnd();
+                    assert_eq!(unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } & WS_EX_TRANSPARENT.0 as isize, 0);
+                    app.pill_hidden = false;
+                    app.settings.pet_return_animation = false;
+                    app.begin_pet_return();
+                    assert!(app.pet.returning.is_none() && app.pet.desktop.is_none());
+                }
                 app.pill_motion.gate = Default::default();
                 app.maybe_start_music_intro();
+                if app.pill_motion.intro == Some(IntroPhase::Fading) {
+                    app.music_intro_step();
+                }
                 app.ui.tab = view::Tab::Note;
                 app.expand();
                 assert!(app.state == State::Expanded && !app.pill_motion_busy());

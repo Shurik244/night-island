@@ -74,6 +74,7 @@ impl TrackTransition {
 
 pub struct HomeUi {
     pub track_transition: TrackTransition,
+    pub preview_timeline: Option<(f32, f32)>,
     pub vol: f32,
     pub mixer_open: bool,
     pub mixer_motion: Option<(f32, std::time::Instant)>,
@@ -98,6 +99,7 @@ impl Default for HomeUi {
     fn default() -> Self {
         Self {
             track_transition: Default::default(),
+            preview_timeline: None,
             vol: 0.5,
             mixer_open: false,
             mixer_motion: None,
@@ -146,7 +148,7 @@ pub enum Info {
 
 pub const HOME_INFO: [(char, &str, Info); 15] = [
     ('\u{E9D9}', "Processor", Info::Metric(Metric::Cpu)),
-    ('\u{E950}', "Memory", Info::Metric(Metric::Ram)),
+    ('\u{E964}', "Memory", Info::Metric(Metric::Ram)),
     ('\u{E7F4}', "Graphics card", Info::Metric(Metric::Gpu)),
     ('\u{EDA2}', "System disk", Info::Metric(Metric::Disk)),
     ('\u{E896}', "Download speed", Info::Metric(Metric::NetDown)),
@@ -862,7 +864,7 @@ pub(in crate::view) fn paint_home(p: &Painter, pill: Rect, scale: f32, ui: &UiSt
         let (tl, tr_) = (cl + pad, cr - pad);
         let ty = ct + 100.0 * scale;
         p.fill_round_rect((tl, ty - 1.5 * scale, tr_, ty + 1.5 * scale), 1.5 * scale, rgba(1.0, 1.0, 1.0, 0.18))?;
-        if let Some((real_pos, len)) = crate::platform::media::progress() {
+        if let Some((real_pos, len)) = ui.home.preview_timeline.or_else(crate::platform::media::progress) {
             let pos = ui.home.seek.map_or(real_pos, |f| f * len);
             let x = tl + (tr_ - tl) * (pos / len).clamp(0.0, 1.0);
             let live = ui.home.hover_act == Some(520) || ui.home.seek.is_some();
@@ -1103,7 +1105,9 @@ pub(in crate::view) fn paint_home(p: &Painter, pill: Rect, scale: f32, ui: &UiSt
     }
 
     paint_home_notification(p, pill, scale, ui)?;
-    paint_dock(p, pill, scale, ui)?;
+    if ui.home.preview_timeline.is_none() {
+        paint_dock(p, pill, scale, ui)?;
+    }
     if discord_strip(ui) {
         paint_discord_strip(p, pill, scale, ui)?;
     }

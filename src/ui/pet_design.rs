@@ -12,6 +12,25 @@ pub enum PetBody {
     Robot,
 }
 
+impl PetBody {
+    pub const ALL: [Self; 6] = [Self::Bear, Self::Cat, Self::Fox, Self::Rabbit, Self::Ghost, Self::Robot];
+
+    pub fn next(self) -> Self {
+        Self::ALL[(Self::ALL.iter().position(|body| *body == self).unwrap_or(0) + 1) % Self::ALL.len()]
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Bear => "Bear",
+            Self::Cat => "Cat",
+            Self::Fox => "Fox",
+            Self::Rabbit => "Rabbit",
+            Self::Ghost => "Ghost",
+            Self::Robot => "Robot",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PetPattern {

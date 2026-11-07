@@ -51,6 +51,11 @@ pub struct Media {
 static TIMELINE: Mutex<Option<(f32, f32, Instant, bool)>> = Mutex::new(None);
 static TIMELINE_START: Mutex<f32> = Mutex::new(0.0);
 
+#[cfg(test)]
+pub fn debug_progress(pos: f32, length: f32) {
+    *TIMELINE.lock().unwrap() = Some((pos, length, Instant::now(), false));
+}
+
 pub fn progress() -> Option<(f32, f32)> {
     if selected() == Source::Wave {
         return crate::services::yandex::progress();

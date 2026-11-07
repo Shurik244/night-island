@@ -46,6 +46,9 @@ impl App {
     }
 
     pub(in crate::island) fn note_changed(&mut self) {
+        if self.wave_search() {
+            return self.wave_search_changed();
+        }
         if self.extra_field().is_some() {
             self.set_timer(Timer::Geo, 450);
         }

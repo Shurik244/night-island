@@ -15,6 +15,7 @@ pub const ID_SETTINGS: usize = 2;
 pub const ID_RESET_POS: usize = 3;
 pub const ID_EXIT: usize = 4;
 pub const ID_REBUILD: usize = 5;
+pub const ID_GUIDE: usize = 6;
 
 const ICON_ID: u32 = 1;
 const APP_ICON: usize = 1;
@@ -103,6 +104,7 @@ pub fn menu(scale: f32, with_gpu: crate::ui::menu::WithGpu) -> Option<usize> {
     let mut entries = vec![
         Entry::item(ID_TOGGLE, "Open / close island").glyph('\u{E8A7}'),
         Entry::item(ID_SETTINGS, "Settings").glyph('\u{E713}'),
+        Entry::item(ID_GUIDE, "Quick tour").glyph('\u{E82D}'),
         Entry::item(ID_RESET_POS, "Reset position").glyph('\u{E72C}'),
         Entry::divider(),
     ];

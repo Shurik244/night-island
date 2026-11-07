@@ -25,13 +25,12 @@ pub struct Api {
 }
 
 impl Api {
-    pub fn call(&self, path: &str, body: Option<Value>) -> Result<Value> {
+    fn endpoint(&self, path: &str, body: Option<&str>, mime: &str) -> Result<Value> {
         let base = "https://api.music.yandex.net";
         #[cfg(test)]
         let base = self.base.as_deref().unwrap_or(base);
         let url = format!("{base}{path}");
-        let payload = body.map(|v| v.to_string());
-        let (status, text) = request(&url, Some(&self.token), payload.as_deref(), "application/json")?;
+        let (status, text) = request(&url, Some(&self.token), body, mime)?;
         if status == 401 {
             return Err(SIGN_IN);
         }
@@ -44,6 +43,9 @@ impl Api {
         if !(200..300).contains(&status) {
             return Err("Yandex Music could not complete the request. Try again.");
         }
+        if text.trim().is_empty() && body.is_some() {
+            return Ok(Value::Null);
+        }
         let value: Value = serde_json::from_str(&text).map_err(|_| NETWORK)?;
         if value.get("error").is_some() {
             return Err("Yandex Music could not complete the request. Try again.");
@@ -51,19 +53,106 @@ impl Api {
         Ok(value.get("result").cloned().unwrap_or(value))
     }
 
-    pub fn account(&self) -> Result<String> {
+    pub fn call(&self, path: &str, body: Option<Value>) -> Result<Value> {
+        let payload = body.map(|v| v.to_string());
+        self.endpoint(path, payload.as_deref(), "application/json")
+    }
+
+    pub fn account(&self) -> Result<(String, u64)> {
         let v = self.call("/account/status", None)?;
-        v.pointer("/account/displayName")
+        let uid = numeric_id(&v["account"]["uid"]).and_then(|s| s.parse().ok()).ok_or(SIGN_IN)?;
+        let name = v
+            .pointer("/account/displayName")
             .or_else(|| v.pointer("/account/login"))
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .map(|s| s.chars().take(80).collect())
-            .ok_or(SIGN_IN)
+            .ok_or(SIGN_IN)?;
+        Ok((name, uid))
     }
 
     pub fn groups(&self) -> Result<Vec<Group>> {
         let v = self.call("/rotor/wave/settings?seeds=user%3Aonyourwave", None)?;
         Ok(parse_groups(&v))
+    }
+
+    pub fn station(&self, query: &str, artist: bool) -> Result<(String, String)> {
+        let (kind, list, label) = if artist { ("artist", "artists", "name") } else { ("track", "tracks", "title") };
+        let result = self.call(&format!("/search?text={}&type={kind}&nocorrect=False&page=0", pct(query)), None)?;
+        let item = if result["best"]["type"] == kind {
+            &result["best"]["result"]
+        } else {
+            result[list]["results"]
+                .as_array()
+                .and_then(|items| items.first())
+                .ok_or("No matching Yandex Music result")?
+        };
+        let id = match &item["id"] {
+            Value::String(s) if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) => s.clone(),
+            Value::Number(n) if n.is_u64() => n.to_string(),
+            _ => return Err("No matching Yandex Music result"),
+        };
+        let name = item[label].as_str().ok_or("No matching Yandex Music result")?;
+        Ok((format!("{kind}:{id}"), name.chars().take(160).collect()))
+    }
+
+    pub fn search_tracks(&self, query: &str) -> Result<Vec<Track>> {
+        let result = self.call(&format!("/search?text={}&type=track&nocorrect=False&page=0", pct(query)), None)?;
+        let mut seen = std::collections::HashSet::new();
+        let best = (result["best"]["type"] == "track").then(|| &result["best"]["result"]);
+        Ok(best
+            .into_iter()
+            .chain(result["tracks"]["results"].as_array().into_iter().flatten())
+            .filter_map(|item| parse_track(item, ""))
+            .filter(|track| seen.insert(super::track_key(&track.id).to_owned()))
+            .take(20)
+            .collect())
+    }
+
+    pub fn library_ids(&self, uid: u64, disliked: bool) -> Result<Vec<String>> {
+        let (list, revision) =
+            if disliked { ("dislikes", "if_modified_since_revision") } else { ("likes", "if-modified-since-revision") };
+        let value = self.call(&format!("/users/{uid}/{list}/tracks?{revision}=0"), None)?;
+        let tracks = value.pointer("/library/tracks").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+        let mut seen = std::collections::HashSet::new();
+        Ok(tracks
+            .iter()
+            .filter_map(|t| {
+                let id = numeric_id(&t["id"])?;
+                if !seen.insert(id.clone()) {
+                    return None;
+                }
+                Some(with_album(id, &t["albumId"]))
+            })
+            .collect())
+    }
+
+    pub fn library_tracks(&self, ids: &[String]) -> Result<Vec<Track>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let body = format!("track-ids={}", pct(&ids.join(",")));
+        let value = self.endpoint("/tracks", Some(&body), "application/x-www-form-urlencoded")?;
+        let mut tracks = value.as_array().ok_or(NETWORK)?.iter().filter_map(|t| parse_track(t, "")).collect::<Vec<_>>();
+        tracks.sort_by_key(|track| ids.iter().position(|id| super::track_key(id) == super::track_key(&track.id)));
+        Ok(tracks)
+    }
+
+    pub fn rate(&self, uid: u64, track: &Track, kind: &str) -> Result<()> {
+        let (list, action) = match kind {
+            "like" => ("likes", "add-multiple"),
+            "unlike" => ("likes", "remove"),
+            "dislike" => ("dislikes", "add-multiple"),
+            "undislike" => ("dislikes", "remove"),
+            _ => return Err("Unknown My Wave feedback"),
+        };
+        let path = format!("/users/{uid}/{list}/tracks/{action}");
+        let form = format!("track-ids={}", pct(&track.id));
+        self.endpoint(&path, Some(&form), "application/x-www-form-urlencoded")?;
+        if kind != "undislike" {
+            self.feedback(&track.session, &track.batch, kind, Some(&track.id), 0.0);
+        }
+        Ok(())
     }
 
     pub fn stream(&self, id: &str) -> Result<String> {
@@ -222,54 +311,65 @@ fn direct_url(xml: &str) -> Result<String> {
     if trusted_url(&url) { Ok(url) } else { Err(NETWORK) }
 }
 
+fn numeric_id(value: &Value) -> Option<String> {
+    match value {
+        Value::Number(number) if number.is_u64() => Some(number.to_string()),
+        Value::String(id) if !id.is_empty() && id.len() <= 20 && id.bytes().all(|byte| byte.is_ascii_digit()) => {
+            Some(id.clone())
+        }
+        _ => None,
+    }
+}
+
+fn with_album(id: String, album: &Value) -> String {
+    match numeric_id(album) {
+        Some(album) => format!("{id}:{album}"),
+        None => id,
+    }
+}
+
 pub fn parse_tracks(value: &Value) -> Vec<Track> {
+    let batch = value["batchId"].as_str().unwrap_or_default();
     value["sequence"]
         .as_array()
         .into_iter()
         .flatten()
         .take(100)
-        .filter_map(|entry| {
-            let t = &entry["track"];
-            if t["available"].as_bool() == Some(false) {
-                return None;
-            }
-            let id = match &t["id"] {
-                Value::String(s) => s.clone(),
-                Value::Number(n) => n.to_string(),
-                _ => return None,
-            };
-            if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            let id = t["albums"][0]["id"].as_u64().map_or_else(|| id.clone(), |album| format!("{id}:{album}"));
-            let title = t["title"].as_str()?.chars().take(200).collect();
-            let artist = t["artists"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|a| a["name"].as_str())
-                .take(8)
-                .collect::<Vec<_>>()
-                .join(", ")
-                .chars()
-                .take(200)
-                .collect();
-            let cover = t["coverUri"]
-                .as_str()
-                .map(|c| format!("https://{}", c.replace("%%", "300x300")))
-                .filter(|c| trusted_url(c))
-                .unwrap_or_default();
-            Some(Track {
-                id,
-                title,
-                artist,
-                cover,
-                batch: value["batchId"].as_str().unwrap_or_default().into(),
-                session: String::new(),
-                palette: super::palette::Palette::from_track(t),
-            })
-        })
+        .filter_map(|entry| parse_track(&entry["track"], batch))
         .collect()
+}
+
+fn parse_track(t: &Value, batch: &str) -> Option<Track> {
+    if t["available"].as_bool() == Some(false) {
+        return None;
+    }
+    let id = with_album(numeric_id(&t["id"])?, &t["albums"][0]["id"]);
+    let title = t["title"].as_str()?.chars().take(200).collect();
+    let artist = t["artists"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| a["name"].as_str())
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(", ")
+        .chars()
+        .take(200)
+        .collect();
+    let cover = t["coverUri"]
+        .as_str()
+        .map(|c| format!("https://{}", c.replace("%%", "300x300")))
+        .filter(|c| trusted_url(c))
+        .unwrap_or_default();
+    Some(Track {
+        id,
+        title,
+        artist,
+        cover,
+        batch: batch.into(),
+        session: String::new(),
+        palette: super::palette::Palette::from_track(t),
+    })
 }
 
 pub fn parse_groups(v: &Value) -> Vec<Group> {
@@ -313,6 +413,74 @@ pub fn parse_groups(v: &Value) -> Vec<Group> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "Reads the configured Yandex account and plays a catalog track muted without changing the library"]
+    fn configured_account_can_read_wave_filters_and_search_a_station() {
+        unsafe {
+            let _ = windows::Win32::System::WinRT::RoInitialize(windows::Win32::System::WinRT::RO_INIT_MULTITHREADED);
+        }
+        let api = Api {
+            token: crate::services::integrations::load_secret("yandex-music").expect("Yandex Music sign-in required"),
+            base: None,
+        };
+        let (name, uid) = api.account().unwrap();
+        assert!(!name.is_empty());
+        let liked = api.library_ids(uid, false).unwrap();
+        if !liked.is_empty() {
+            let tracks = api.library_tracks(&liked[..liked.len().min(4)]).unwrap();
+            assert!(tracks.iter().all(|track| !track.title.is_empty()));
+        }
+        assert!(!api.groups().unwrap().is_empty());
+        let (seed, label) = api.station("Daft Punk", true).unwrap();
+        assert!(seed.starts_with("artist:") && label.to_lowercase().contains("daft punk"));
+        let (tx, _rx) = std::sync::mpsc::sync_channel(16);
+        let mut worker = super::super::Worker::new(0, tx);
+        worker.api = api;
+        worker.state.config.volume = 0;
+        let result = worker
+            .voice(super::super::VoiceAction::Track { title: "Around the World".into(), artist: "Daft Punk".into() })
+            .unwrap();
+        assert!(result.contains("Around the World"));
+        let player = worker.player.as_ref().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(12);
+        while !player.state().2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(player.state().2, "exact catalog track must start in the local player");
+        assert_eq!(worker.state.media.title, "Around the World");
+        assert_eq!(worker.state.media.artist, "Daft Punk");
+        worker.stop();
+    }
+    #[test]
+    #[ignore = "Uses the configured Yandex catalog and starts the requested track muted"]
+    fn spoken_jesus_starts_the_requested_recording() {
+        use super::super::Worker;
+        unsafe {
+            let _ = windows::Win32::System::WinRT::RoInitialize(windows::Win32::System::WinRT::RO_INIT_MULTITHREADED);
+        }
+        let (tx, _rx) = std::sync::mpsc::sync_channel(16);
+        let mut worker = Worker::new(0, tx);
+        worker.api.token = crate::services::integrations::load_secret("yandex-music").expect("Yandex Music sign-in");
+        worker.state.config.volume = 0;
+        for phrase in [
+            "Включи в моей волне трек Jesus от группы курящих нет",
+            "Найди в моей волне трек «Джезус» от группы «Курящих нет» и включи его.",
+        ] {
+            let action = crate::tools::voicecmd::local_yandex(phrase).expect("direct request");
+            worker.voice(action).unwrap_or_else(|error| panic!("{phrase}: {error}"));
+            let player = worker.player.as_ref().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(12);
+            while !player.state().2 && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert!(player.state().2, "requested track must start");
+            assert!(worker.state.media.title.eq_ignore_ascii_case("Jesus"));
+            assert_eq!(worker.state.media.artist.to_lowercase(), "курящих нет");
+        }
+        worker.stop();
+    }
+
     fn server(responses: Vec<(u16, &'static str)>) -> (String, std::thread::JoinHandle<Vec<String>>) {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -359,6 +527,28 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Needs native WinRT HTTP"]
+    fn starting_my_wave_leaves_the_station_and_uses_saved_filters() {
+        use super::super::Worker;
+        unsafe {
+            let _ = windows::Win32::System::WinRT::RoInitialize(windows::Win32::System::WinRT::RO_INIT_MULTITHREADED);
+        }
+        let (base, server) = server(vec![(200, r#"{"result":{"radioSessionId":"fixture","sequence":[]}}"#)]);
+        let (tx, _rx) = std::sync::mpsc::sync_channel(16);
+        let mut worker = Worker::new(0, tx);
+        worker.api = Api { token: "fixture-token".into(), base: Some(base) };
+        worker.station = Some("artist:8".into());
+        worker.state.config.selection.insert("language".into(), "settingLanguage:russian".into());
+        let action = crate::tools::voicecmd::local_yandex("Включи мою волну.").unwrap();
+        assert!(worker.voice(action).is_err());
+        assert_eq!(worker.station.as_deref(), Some("artist:8"));
+        let requests = server.join().unwrap();
+        assert!(requests[0].starts_with("POST /rotor/session/new "));
+        let body: Value = serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["seeds"], json!(["user:onyourwave", "settingLanguage:russian"]));
+    }
+
+    #[test]
     #[ignore = "Needs WinRT (Uri, HttpClient), which wine does not provide"]
     fn rotor_protocol_keeps_oauth_on_api_and_serializes_personal_seeds() {
         unsafe {
@@ -376,6 +566,36 @@ mod tests {
         assert!(requests[0].starts_with("POST /rotor/session/new HTTP/1.1"));
         assert!(requests[0].to_ascii_lowercase().contains("authorization: oauth fixture-token"));
         assert_eq!(serde_json::from_str::<Value>(requests[0].split("\r\n\r\n").nth(1).unwrap()).unwrap(), body);
+    }
+
+    #[test]
+    #[ignore = "Needs native WinRT HTTP"]
+    fn library_protocol_preserves_track_order_and_writes_ratings_as_forms() {
+        unsafe {
+            let _ = windows::Win32::System::WinRT::RoInitialize(windows::Win32::System::WinRT::RO_INIT_MULTITHREADED);
+        }
+        let (base, server) = server(vec![
+            (200, r#"{"result":{"library":{"tracks":[{"id":"2","albumId":20},{"id":1},{"id":"2"}]}}}"#),
+            (200, r#"{"result":[{"id":1,"title":"First"},{"id":2,"title":"Second","albums":[{"id":20}]}]}"#),
+            (200, r#"{"result":{"revision":2}}"#),
+            (200, r#"{"result":{"revision":3}}"#),
+        ]);
+        let api = Api { token: "fixture-token".into(), base: Some(base) };
+        let ids = api.library_ids(8, false).unwrap();
+        assert_eq!(ids, ["2:20", "1"]);
+        let tracks = api.library_tracks(&ids).unwrap();
+        assert_eq!(tracks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["2:20", "1"]);
+        api.rate(8, &tracks[0], "like").unwrap();
+        api.rate(8, &tracks[0], "dislike").unwrap();
+        let requests = server.join().unwrap();
+        assert!(requests[0].starts_with("GET /users/8/likes/tracks?if-modified-since-revision=0 "));
+        assert!(requests[1].starts_with("POST /tracks "));
+        assert!(requests[1].ends_with("track-ids=2%3A20%2C1"));
+        for (request, path) in requests[2..].iter().zip(["likes", "dislikes"]) {
+            assert!(request.starts_with(&format!("POST /users/8/{path}/tracks/add-multiple ")));
+            assert!(request.to_ascii_lowercase().contains("application/x-www-form-urlencoded"));
+            assert!(request.ends_with("track-ids=2%3A20"));
+        }
     }
 
     #[test]

@@ -4,6 +4,14 @@ use crate::services::yandex::{self, Command};
 impl App {
     pub(in crate::island) fn on_yandex(&mut self) {
         let next = yandex::snapshot();
+        if next.account.is_empty() {
+            self.close_wave_search();
+        }
+        if next.search.as_ref().is_some_and(|result| {
+            self.ui.yandex.search_sent.as_ref().is_some_and(|(request, _)| *request == result.request)
+        }) {
+            self.ui.yandex.search_sent = None;
+        }
         if self.ui.tab == view::Tab::Yandex
             && self.pointer.seek_drag
             && (next.media.title != self.ui.yandex.state.media.title
@@ -19,16 +27,100 @@ impl App {
         let animate = self.state == State::Expanded
             && matches!(self.ui.tab, view::Tab::Home | view::Tab::Yandex)
             && self.settings.tab_anim != crate::data::settings::TabAnim::None;
+        let wave_volume_changed = next.config.volume != self.ui.yandex.state.config.volume;
         self.ui.yandex.accept(next, animate);
+        if wave_volume_changed
+            && self.ui.home.vol_track
+            && self.ui.media.source == yandex::SOURCE
+            && !self.pointer.vol_drag
+        {
+            self.ui.home.app_vol = f32::from(self.ui.yandex.state.config.volume) / 100.0;
+        }
         self.render_settings_win();
         if self.ui.yandex.colour_transition.is_some() {
             self.set_timer(Timer::UiAnim, self.frame_ms());
         }
         self.on_media();
         self.start_progress_timer();
+        if self.ui.tab == view::Tab::Yandex || (wave_volume_changed && self.ui.tab == view::Tab::Home) {
+            self.repaint_expanded();
+        }
+    }
+
+    pub(in crate::island) fn wave_search(&self) -> bool {
+        self.ui.tab == view::Tab::Yandex && self.ui.yandex.search_open && !self.ui.cmd.open
+    }
+
+    pub(in crate::island) fn close_wave_search(&mut self) {
+        if !self.ui.yandex.search_open {
+            return;
+        }
+        self.kill_timer(Timer::WaveSearch);
+        if self.wave_search() {
+            self.end_edit(true);
+        }
+        self.ui.yandex.search_open = false;
+        self.ui.yandex.search_selected = None;
+        self.ui.yandex.hover = None;
         if self.ui.tab == view::Tab::Yandex {
             self.repaint_expanded();
         }
+    }
+
+    pub(in crate::island) fn wave_search_changed(&mut self) {
+        let input = &mut self.ui.yandex.search_input;
+        let text = input.text();
+        if text.chars().count() > view::SEARCH_MAX_CHARS {
+            input.set_text(&text.chars().take(view::SEARCH_MAX_CHARS).collect::<String>());
+        }
+        self.ui.yandex.search_selected = None;
+        let query = self.ui.yandex.search_query();
+        if query.is_empty() || self.ui.yandex.search_result().is_some() {
+            self.kill_timer(Timer::WaveSearch);
+        } else {
+            self.ui.yandex.search_page = 0;
+            self.ui.yandex.search_selected = None;
+            self.set_timer(Timer::WaveSearch, 350);
+        }
+        self.ui.caret_on = true;
+        self.set_timer(Timer::Caret, super::super::editing::CARET_BLINK_MS);
+        self.repaint_expanded();
+    }
+
+    pub(in crate::island) fn submit_wave_search(&mut self) {
+        self.kill_timer(Timer::WaveSearch);
+        let wave = &self.ui.yandex;
+        let query = wave.search_query();
+        if !wave.search_open || query.is_empty() || wave.search_sent.as_ref().is_some_and(|(_, sent)| sent == &query) {
+            return;
+        }
+        if wave.search_result().is_some_and(|result| result.error.is_none()) {
+            return;
+        }
+        if let Some(request) = yandex::search(query.clone()) {
+            self.ui.yandex.search_page = 0;
+            self.ui.yandex.search_selected = None;
+            self.ui.yandex.search_sent = Some((request, query));
+        } else {
+            self.set_timer(Timer::WaveSearch, 350);
+        }
+        self.repaint_expanded();
+    }
+
+    pub(in crate::island) fn play_wave_result(&mut self, index: usize) {
+        let wave = &self.ui.yandex;
+        if wave.state.busy {
+            return;
+        }
+        let Some(track) = wave.search_rows().get(index) else { return };
+        let command = if wave.state.current_id.as_ref() == Some(&track.id) {
+            Command::Toggle
+        } else {
+            Command::PlaySearch { query: wave.search_query(), id: track.id.clone() }
+        };
+        self.ui.yandex.search_selected = None;
+        self.end_edit(false);
+        yandex::send(command);
     }
 
     pub(in crate::island) fn click_yandex(&mut self, x: i32, y: i32) {
@@ -46,6 +138,74 @@ impl App {
                 self.begin_seek(view::wave_fraction(self.pill_rect(true), self.scale, x as f32));
                 return;
             }
+            Some(Hit::Volume) => {
+                self.pointer.vol_drag = true;
+                unsafe {
+                    windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(self.hwnd);
+                }
+                self.drag_volume(x);
+                return;
+            }
+            Some(Hit::Search) => {
+                if self.ui.yandex.search_open {
+                    self.close_wave_search();
+                } else {
+                    self.ui.yandex.search_open = true;
+                    self.ui.yandex.show_library = false;
+                    self.begin_edit();
+                    self.submit_wave_search();
+                    self.repaint_expanded();
+                }
+                return;
+            }
+            Some(Hit::SearchInput) => {
+                self.begin_edit();
+                if let Some(layout) = self.active_layout() {
+                    let inner = view::wave_search_field(self.pill_rect(true), self.scale).1;
+                    let input = &mut self.ui.yandex.search_input;
+                    let (caret, _, _) = edit::caret_xy(&layout, input.utf16_at(input.caret));
+                    let shift = (caret - (inner.2 - inner.0) + 8.0 * self.scale).max(0.0);
+                    input.click(&layout, x as f32 - inner.0 + shift, 0.0, false);
+                }
+                self.ui.yandex.search_selected = None;
+                self.repaint_expanded();
+                return;
+            }
+            Some(Hit::SearchPage(dir)) => {
+                self.ui.yandex.search_page = self.ui.yandex.search_page.saturating_add_signed(dir as isize);
+                self.ui.yandex.search_selected = None;
+                self.repaint_expanded();
+                return;
+            }
+            Some(Hit::PlaySearch(index)) => return self.play_wave_result(index),
+            Some(Hit::Library) => {
+                self.close_wave_search();
+                self.ui.yandex.show_library = !self.ui.yandex.show_library;
+                self.ui.yandex.hover = None;
+                self.repaint_expanded();
+                if !self.ui.yandex.show_library {
+                    return;
+                }
+                Command::Library(0)
+            }
+            Some(Hit::LibraryPage(dir)) => {
+                let Some(library) = &self.ui.yandex.state.library else { return };
+                Command::Library(library.page.saturating_add_signed(dir as isize))
+            }
+            Some(Hit::PlayLiked(index)) => {
+                let Some(track) = self.ui.yandex.state.library.as_ref().and_then(|page| page.tracks.get(index)) else {
+                    return;
+                };
+                if self.ui.yandex.state.current_id.as_ref() == Some(&track.id) {
+                    Command::Toggle
+                } else {
+                    Command::PlayLiked(track.id.clone())
+                }
+            }
+            Some(Hit::Rate(rating)) => {
+                let Some(id) = self.ui.yandex.state.current_id.clone() else { return };
+                Command::Rate(id, rating)
+            }
             Some(Hit::Connect) => Command::Connect,
             Some(Hit::Cancel) => Command::Cancel,
             Some(Hit::Disconnect) => Command::Disconnect,
@@ -53,6 +213,9 @@ impl App {
             Some(Hit::Previous) => Command::Previous,
             Some(Hit::Next) => Command::Next,
             Some(Hit::Stop) => Command::Stop,
+            Some(Hit::Retry) if self.ui.yandex.show_library => {
+                Command::Library(self.ui.yandex.state.library.as_ref().map_or(0, |page| page.page))
+            }
             Some(Hit::Retry) => Command::Retry,
             Some(Hit::Autoplay) => Command::Autoplay(!self.ui.yandex.state.config.autoplay),
             Some(Hit::Filter(index, dir)) => {
@@ -106,7 +269,8 @@ mod tests {
         let mut ui = view::UiState::new();
         ui.tab = view::Tab::Yandex;
         ui.cfg.header_tabs = vec!["My Wave".into(), "Weather".into(), "App mixer".into()];
-        use crate::services::yandex::Group;
+        use crate::services::yandex::{Group, LibraryPage, Rating, SearchResult, Track};
+        crate::ui::i18n::set_ru(true);
         use crate::ui::gfx::rgba;
         let groups = vec![
             Group {
@@ -138,6 +302,33 @@ mod tests {
                 ui.yandex.state.account = "Музыка для тебя".into();
                 ui.yandex.state.groups = groups.clone();
                 ui.yandex.state.active = true;
+                ui.yandex.state.current_id = Some("1".into());
+                ui.yandex.state.rating = Rating::Like;
+                ui.yandex.state.config.volume = 37;
+                ui.yandex.show_library = i == 3;
+                ui.yandex.search_open = i == 1;
+                ui.editing = i == 1;
+                let tracks: Vec<_> = ["Ночной город", "Маяк", "Тёплый вечер", "Дорога домой"]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, title)| Track {
+                        id: (i + 1).to_string(),
+                        title: title.into(),
+                        artist: "Любимый исполнитель".into(),
+                        cover: String::new(),
+                        batch: String::new(),
+                        session: String::new(),
+                        palette: Default::default(),
+                    })
+                    .collect();
+                if ui.yandex.show_library {
+                    ui.yandex.state.library = Some(LibraryPage { page: 0, total: 12, tracks });
+                } else if ui.yandex.search_open {
+                    let query = "Любимый исполнитель";
+                    ui.yandex.search_input.set_text(query);
+                    ui.yandex.state.search =
+                        Some(SearchResult { request: 1, query: query.into(), tracks, error: None });
+                }
                 ui.yandex.state.config.selection.insert("moodEnergy".into(), "settingMoodEnergy:calm".into());
                 let rgb = if i < 2 { (238, 108, 48) } else { (50, 156, 230) };
                 ui.yandex.state.palette = crate::services::yandex::palette::Palette {

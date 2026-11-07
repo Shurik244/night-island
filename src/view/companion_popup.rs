@@ -35,6 +35,7 @@ pub enum CompanionChatHit {
     Close,
     Setup,
     Send,
+    Voice,
     Input,
     History,
     Header,
@@ -50,6 +51,7 @@ pub struct CompanionChatView {
     pub focus: CompanionChatHit,
     pub caret_on: bool,
     pub active: bool,
+    pub voice_enabled: bool,
 }
 
 impl Default for CompanionChatView {
@@ -63,6 +65,7 @@ impl Default for CompanionChatView {
             focus: CompanionChatHit::Input,
             caret_on: true,
             active: true,
+            voice_enabled: true,
         }
     }
 }
@@ -76,6 +79,7 @@ pub struct CompanionChatLayout {
     pub composer: Rect,
     pub input: Rect,
     pub send: Rect,
+    pub voice: Rect,
     pub resize: Rect,
 }
 
@@ -89,6 +93,7 @@ pub fn companion_chat_layout(size: (f32, f32), scale: f32, input_h: f32) -> Comp
     let setup = (close.0 - 36.0 * scale, close.1, close.0 - 6.0 * scale, close.3);
     let send =
         (composer.2 - 43.0 * scale, composer.3 - 43.0 * scale, composer.2 - 9.0 * scale, composer.3 - 9.0 * scale);
+    let voice = (send.0 - 39.0 * scale, send.1, send.0 - 5.0 * scale, send.3);
     CompanionChatLayout {
         pet: (setup.0 - 82.0 * scale, setup.1, setup.0 - 6.0 * scale, setup.3),
         close,
@@ -96,8 +101,9 @@ pub fn companion_chat_layout(size: (f32, f32), scale: f32, input_h: f32) -> Comp
         header: (pad, 20.0 * scale, w - pad, 76.0 * scale),
         history: (pad, 88.0 * scale, w - pad, composer.1 - 16.0 * scale),
         composer,
-        input: (composer.0 + 12.0 * scale, composer.1 + 12.0 * scale, send.0 - 8.0 * scale, composer.3 - 12.0 * scale),
+        input: (composer.0 + 12.0 * scale, composer.1 + 12.0 * scale, voice.0 - 8.0 * scale, composer.3 - 12.0 * scale),
         send,
+        voice,
         resize: (w - 27.0 * scale, h - 27.0 * scale, w - 11.0 * scale, h - 11.0 * scale),
     }
 }
@@ -108,6 +114,7 @@ pub fn hit_companion_chat(layout: &CompanionChatLayout, x: f32, y: f32) -> Optio
         (CompanionChatHit::Close, layout.close),
         (CompanionChatHit::Setup, layout.setup),
         (CompanionChatHit::Send, layout.send),
+        (CompanionChatHit::Voice, layout.voice),
         (CompanionChatHit::Input, layout.composer),
         (CompanionChatHit::History, layout.history),
         (CompanionChatHit::Header, layout.header),
@@ -275,6 +282,23 @@ pub fn paint_companion_chat(p: &Painter, size: (f32, f32), scale: f32, ui: &Comp
         && !ui.chat.pet.pending
         && (!ui.chat.input.text().trim().is_empty()
             || (ui.chat.pet.enabled && !ui.chat.pet.text_only && !ui.chat.pet.files.is_empty()));
+    if ui.voice_enabled {
+        p.fill_round_rect(
+            layout.voice,
+            12.0 * scale,
+            rgba(
+                1.0,
+                1.0,
+                1.0,
+                if ui.hover == Some(CompanionChatHit::Voice) || ui.focus == CompanionChatHit::Voice {
+                    0.15
+                } else {
+                    0.07
+                },
+            ),
+        )?;
+        p.glyph('\u{E720}', layout.voice, 15.0 * scale, WHITE)?;
+    }
     p.fill_round_rect(
         layout.send,
         12.0 * scale,

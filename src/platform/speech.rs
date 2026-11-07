@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use windows::Media::SpeechSynthesis::{SpeechSynthesizer, VoiceInformation};
@@ -11,9 +11,59 @@ use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{HSTRING, PCWSTR};
 
+#[path = "speech_stream.rs"]
+mod stream;
+
 pub const MAX_CHARS: usize = 600;
 
 static GENERATION: AtomicU32 = AtomicU32::new(0);
+static SPEAKING: AtomicU32 = AtomicU32::new(0);
+static PLAYBACK: Mutex<Option<Playback>> = Mutex::new(None);
+
+struct Playback {
+    generation: u32,
+    started: Instant,
+    levels: Vec<f32>,
+}
+
+impl Playback {
+    fn new(generation: u32, wav: &[u8]) -> Self {
+        let bytes_per_second = u32::from_le_bytes(wav[28..32].try_into().unwrap()) as usize;
+        let stride = bytes_per_second / 50 / 2 * 2;
+        let levels = pcm_levels(&wav[44..], stride);
+        Self { generation, started: Instant::now(), levels }
+    }
+}
+
+fn pcm_levels(pcm: &[u8], stride: usize) -> Vec<f32> {
+    pcm.chunks(stride)
+        .map(|chunk| {
+            let energy = chunk
+                .chunks_exact(2)
+                .map(|pair| {
+                    let sample = f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32768.0;
+                    sample * sample
+                })
+                .sum::<f32>();
+            ((energy / (chunk.len() / 2) as f32).sqrt() * 4.0).min(1.0)
+        })
+        .collect()
+}
+
+pub fn current(generation: u32) -> bool {
+    GENERATION.load(Ordering::SeqCst) == generation
+}
+
+pub fn busy() -> bool {
+    let generation = SPEAKING.load(Ordering::SeqCst);
+    generation != 0 && current(generation)
+}
+
+pub fn level() -> Option<f32> {
+    let playback = PLAYBACK.lock().ok()?;
+    let playback = playback.as_ref().filter(|p| current(p.generation))?;
+    playback.levels.get((playback.started.elapsed().as_millis() / 20) as usize).copied()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lang {
@@ -31,6 +81,29 @@ pub fn language_of(text: &str) -> Lang {
         }
     }
     if cyrillic > 0 && cyrillic >= latin { Lang::Russian } else { Lang::Other }
+}
+
+pub const FISH_CUES: &[&str] = &[
+    "[excited]",
+    "[laughing]",
+    "[whispering]",
+    "[break]",
+    "[long-break]",
+    "[calm]",
+    "[happy]",
+    "[sad]",
+    "[soft tone]",
+    "[emphasis]",
+    "[chuckling]",
+    "[sighing]",
+];
+
+pub fn plain_text(text: &str) -> String {
+    let mut plain = text.to_owned();
+    for cue in FISH_CUES {
+        plain = plain.replace(cue, "");
+    }
+    plain.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub fn clip(text: &str) -> String {
@@ -107,9 +180,9 @@ pub fn stop() {
 pub const WM_SPOKEN: u32 = WM_APP + 83;
 const ECHO_PAUSE: Duration = Duration::from_millis(600);
 
-fn post_spoken(raw: isize) {
+fn post_spoken(raw: isize, generation: u32) {
     unsafe {
-        let _ = PostMessageW(Some(HWND(raw as *mut c_void)), WM_SPOKEN, WPARAM(0), LPARAM(0));
+        let _ = PostMessageW(Some(HWND(raw as *mut c_void)), WM_SPOKEN, WPARAM(generation as usize), LPARAM(0));
     }
 }
 
@@ -223,12 +296,51 @@ pub fn eleven_url(base: &str, voice: &str) -> String {
     format!("{base}/v1/text-to-speech/{voice}?output_format=wav_24000")
 }
 
-fn fish_request(text: &str, natural: &Natural) -> String {
+fn fish_sentence_text(text: &str) -> String {
+    let text = text.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ':' | ';'));
+    let mut spoken = String::with_capacity(text.len());
+    for (i, ch) in text.char_indices() {
+        spoken.push(ch);
+        if !matches!(ch, '.' | '?' | '!' | '\u{2026}') {
+            continue;
+        }
+        let tail = &text[i + ch.len_utf8()..];
+        let next = tail.trim_start();
+        if next.is_empty()
+            || next.len() == tail.len()
+            || next.starts_with("[break]")
+            || next.starts_with("[long-break]")
+        {
+            continue;
+        }
+        let word = text[..i].split_whitespace().next_back().unwrap_or_default();
+        if ch == '.'
+            && ((word.chars().count() == 1 && word.starts_with(char::is_uppercase))
+                || matches!(
+                    word.to_lowercase().as_str(),
+                    "гг" | "ул" | "им" | "рис" | "др" | "см" | "mr" | "mrs" | "dr" | "etc"
+                ))
+        {
+            continue;
+        }
+        spoken.push_str(" [break]");
+    }
+    if spoken.chars().last().is_some_and(char::is_alphanumeric) {
+        spoken.push('.');
+    }
+    spoken
+}
+
+fn fish_request(text: &str, natural: &Natural, format: &str) -> String {
+    let text = if natural.model.starts_with("s2") { fish_sentence_text(text) } else { text.to_owned() };
     let mut body = serde_json::json!({
         "text": text,
-        "format": "wav",
+        "format": format,
         "sample_rate": NATURAL_RATE,
         "latency": "balanced",
+        "chunk_length": 140,
+        "min_chunk_length": 50,
+        "condition_on_previous_chunks": true,
     });
     if natural.voice != crate::services::assistant::FISH_DEFAULT_VOICE {
         body["reference_id"] = natural.voice.clone().into();
@@ -255,7 +367,7 @@ fn natural_wav(text: &str, natural: &Natural) -> Option<Vec<u8>> {
         TtsProvider::Fish => (
             fish_url(&base),
             vec![("Authorization", bearer.as_str()), ("model", natural.model.as_str())],
-            fish_request(text, natural),
+            fish_request(text, natural, "wav"),
         ),
         TtsProvider::OpenAi => {
             (format!("{base}/audio/speech"), vec![("Authorization", bearer.as_str())], natural_request(text, natural))
@@ -274,6 +386,8 @@ fn natural_wav(text: &str, natural: &Natural) -> Option<Vec<u8>> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Voice {
     pub local: bool,
+    pub fish_streaming: bool,
+    pub fish_expressions: bool,
     pub natural: Option<Natural>,
 }
 
@@ -287,7 +401,7 @@ pub fn speak_then_notify(text: &str, volume_pct: u8, hwnd: HWND, voice: Voice) {
 
 fn render(text: &str, voice: &Voice) -> Option<Vec<u8>> {
     if voice.local {
-        match crate::platform::localvoice::speak_wav(text) {
+        match crate::platform::localvoice::speak_wav(&plain_text(text)) {
             Some(wav) => return Some(wav),
             None => crate::log_warn!("The local voice could not speak, trying the next one"),
         }
@@ -298,22 +412,87 @@ fn render(text: &str, voice: &Voice) -> Option<Vec<u8>> {
             None => crate::log_info!("The natural voice is not available, the system voice speaks"),
         }
     }
-    synthesize(text).ok()
+    synthesize(&plain_text(text)).ok()
 }
 
-fn start(text: &str, volume_pct: u8, done: Option<isize>, voice: Voice) {
-    let text = clip(text);
+fn stream_fish(text: &str, natural: &Natural, volume: u8, generation: u32) -> bool {
+    let Some((base, key)) = crate::services::ai::tts_credentials(&natural.base, natural.provider) else { return false };
+    let Some(mut output) = stream::Output::new(generation, volume) else { return false };
+    let mut bytes = 0;
+    let status = crate::services::http::post_json_stream(
+        &fish_url(&base),
+        &[("Authorization", &format!("Bearer {key}")), ("model", &natural.model)],
+        &fish_request(text, natural, "pcm"),
+        || current(generation),
+        |chunk| {
+            bytes += chunk.len();
+            if bytes > MAX_SPEECH_BYTES {
+                return None;
+            }
+            output.push(chunk)
+        },
+    );
+    if status == Some(200) {
+        output.drain();
+    } else {
+        crate::log_warn!("Fish Audio stream ended with status {status:?}");
+    }
+    let started = output.started;
+    drop(output);
+    clear_playback(generation);
+    started
+}
+
+fn clear_playback(generation: u32) {
+    if let Ok(mut playback) = PLAYBACK.lock()
+        && playback.as_ref().is_some_and(|p| p.generation == generation)
+    {
+        *playback = None;
+    }
+}
+
+fn finish(generation: u32, done: Option<isize>) {
+    if let Some(raw) = done.filter(|_| current(generation)) {
+        std::thread::sleep(ECHO_PAUSE);
+        if current(generation) {
+            post_spoken(raw, generation);
+        }
+    }
+    let _ = SPEAKING.compare_exchange(generation, 0, Ordering::SeqCst, Ordering::SeqCst);
+}
+
+fn start(text: &str, volume_pct: u8, done: Option<isize>, mut voice: Voice) {
+    let expressive = voice.fish_expressions
+        && voice.natural.as_ref().is_some_and(|n| n.provider == crate::services::assistant::TtsProvider::Fish);
+    let text = if expressive { clip(text) } else { clip(&plain_text(text)) };
+    let mine = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     if text.is_empty() || volume_pct == 0 {
         if let Some(raw) = done {
-            post_spoken(raw);
+            post_spoken(raw, mine);
         }
         return;
     }
-    let mine = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     unsafe {
         let _ = PlaySoundW(PCWSTR::null(), None, SND_PURGE);
     }
+    SPEAKING.store(mine, Ordering::SeqCst);
     std::thread::spawn(move || {
+        if voice.fish_streaming
+            && !voice.local
+            && voice.natural.as_ref().is_some_and(|n| n.provider == crate::services::assistant::TtsProvider::Fish)
+        {
+            let natural = voice.natural.take().unwrap();
+            if stream_fish(&text, &natural, volume_pct, mine) || !current(mine) {
+                finish(mine, done);
+                return;
+            }
+        }
+        let text =
+            if voice.natural.as_ref().is_some_and(|n| n.provider == crate::services::assistant::TtsProvider::Fish) {
+                text
+            } else {
+                plain_text(&text)
+            };
         let started = Instant::now();
         let (sender, parts) = mpsc::sync_channel::<Option<Vec<u8>>>(2);
         let pieces = chunks(&text, CHUNK_CHARS);
@@ -345,14 +524,20 @@ fn start(text: &str, volume_pct: u8, done: Option<isize>, voice: Voice) {
                 crate::log_info!("The voice starts after {} ms", started.elapsed().as_millis());
             }
             scale_wav(&mut wav, volume_pct);
-            unsafe {
-                let _ = PlaySoundW(PCWSTR(wav.as_ptr().cast()), None, SND_MEMORY | SND_SYNC | SND_NODEFAULT);
+            let envelope = Playback::new(mine, &wav);
+            if let Ok(mut playback) = PLAYBACK.lock()
+                && current(mine)
+            {
+                *playback = Some(envelope);
             }
+            unsafe {
+                if current(mine) {
+                    let _ = PlaySoundW(PCWSTR(wav.as_ptr().cast()), None, SND_MEMORY | SND_SYNC | SND_NODEFAULT);
+                }
+            }
+            clear_playback(mine);
         }
-        if let Some(raw) = done.filter(|_| GENERATION.load(Ordering::SeqCst) == mine) {
-            std::thread::sleep(ECHO_PAUSE);
-            post_spoken(raw);
-        }
+        finish(mine, done);
     });
 }
 
@@ -541,16 +726,64 @@ mod tests {
             model: "s2.1-pro".into(),
             voice: "default".into(),
         };
-        let body: serde_json::Value = serde_json::from_str(&fish_request("Привет", &natural)).unwrap();
-        assert_eq!(body["text"], "Привет");
+        let body: serde_json::Value = serde_json::from_str(&fish_request("Привет", &natural, "wav")).unwrap();
+        assert_eq!(body["text"], "Привет.");
         assert_eq!(body["format"], "wav");
         assert_eq!(body["sample_rate"], 24000);
         assert!(body.get("reference_id").is_none(), "the default voice sends no reference");
         natural.voice = "0123456789abcdef0123456789abcdef".into();
-        let body: serde_json::Value = serde_json::from_str(&fish_request("Hi", &natural)).unwrap();
+        let marked = "[excited] Hi! [whispering] A secret. [break] Done.";
+        let body: serde_json::Value = serde_json::from_str(&fish_request(marked, &natural, "pcm")).unwrap();
         assert_eq!(body["reference_id"], "0123456789abcdef0123456789abcdef");
+        assert_eq!(body["text"], "[excited] Hi! [break] [whispering] A secret. [break] Done.");
+        assert_eq!(body["format"], "pcm");
+        assert_eq!(plain_text(marked), "Hi! A secret. Done.");
+        assert_eq!(
+            fish_sentence_text("Температура 3.5 градуса. Завтра снег? Да,"),
+            "Температура 3.5 градуса. [break] Завтра снег? [break] Да."
+        );
+        assert_eq!(
+            fish_sentence_text("Офис на ул. Ленина. [long-break] Едем?"),
+            "Офис на ул. Ленина. [long-break] Едем?"
+        );
         assert_eq!(fish_url("https://api.fish.audio"), "https://api.fish.audio/v1/tts");
         assert_eq!(fish_url("https://api.fish.audio/v1/"), "https://api.fish.audio/v1/tts");
+    }
+
+    #[test]
+    #[ignore = "Uses the configured Fish Audio account and plays a short sample at low volume"]
+    fn configured_fish_stream_starts_speaking_and_releases_on_cancel() {
+        use crate::services::assistant::TtsProvider;
+        let settings = crate::data::settings::Settings::load().assistant;
+        assert_eq!(settings.tts_provider, TtsProvider::Fish);
+        let natural = Natural {
+            provider: TtsProvider::Fish,
+            base: settings.tts_base,
+            model: settings.tts_model,
+            voice: settings.tts_voice,
+        };
+        let started = Instant::now();
+        let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        SPEAKING.store(generation, Ordering::SeqCst);
+        let worker = std::thread::spawn(move || {
+            let delivered = stream_fish(
+                "[excited] Hi there! I'm your new voice agent. [laughing] Ha ha, I promise I'm friendlier than a phone menu. [whispering] Want to know a secret? [break] This whole reply came from one API call.",
+                &natural,
+                8,
+                generation,
+            );
+            finish(generation, None);
+            delivered
+        });
+        while level().is_none() && busy() && started.elapsed() < Duration::from_secs(20) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let speaking = level().is_some();
+        let first_audio = started.elapsed();
+        stop();
+        assert!(worker.join().unwrap() && speaking, "Fish Audio speech must reach the audio output");
+        assert!(level().is_none() && !busy());
+        println!("First speech reached the audio output in {:.2}s. Cancel cleared the cue.", first_audio.as_secs_f32());
     }
 
     #[test]

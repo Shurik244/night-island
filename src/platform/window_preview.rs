@@ -149,6 +149,15 @@ impl Thumbnail {
         true
     }
 
+    pub fn set_opacity(&self, opacity: u8) {
+        if let Some(handle) = self.handle {
+            let properties = DWM_THUMBNAIL_PROPERTIES { dwFlags: DWM_TNP_OPACITY, opacity, ..Default::default() };
+            unsafe {
+                let _ = DwmUpdateThumbnailProperties(handle, &properties);
+            }
+        }
+    }
+
     fn unregister(&mut self) {
         if let Some(handle) = self.handle.take() {
             unsafe {

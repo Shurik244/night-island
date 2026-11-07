@@ -17,6 +17,7 @@ pub enum Tool {
     ReadFile(String),
     WriteFile { path: String, text: String, append: bool },
     Spotify { query: String, kind: String, artist: String },
+    Yandex(crate::services::yandex::VoiceAction),
     SaveScript { name: String, description: String, body: String },
     RunScript { name: String, args: String },
 }
@@ -31,7 +32,7 @@ impl Tool {
             Tool::Search(_) => Cap::WebSearch,
             Tool::ReadFile(_) => Cap::FilesRead,
             Tool::WriteFile { .. } => Cap::FilesWrite,
-            Tool::Spotify { .. } => Cap::Media,
+            Tool::Spotify { .. } | Tool::Yandex(_) => Cap::Media,
         }
     }
 
@@ -46,6 +47,7 @@ impl Tool {
             Tool::ReadFile(_) => "read_file",
             Tool::WriteFile { .. } => "write_file",
             Tool::Spotify { .. } => "spotify",
+            Tool::Yandex(_) => "yandex",
             Tool::SaveScript { .. } => "save_script",
             Tool::RunScript { .. } => "run_script",
         }
@@ -62,7 +64,20 @@ impl Tool {
             | Tool::ReadFile(t) => t,
             Tool::WriteFile { path, .. } => path,
             Tool::Spotify { query, .. } => query,
+            Tool::Yandex(action) => match action {
+                crate::services::yandex::VoiceAction::Station { query, .. } => query,
+                crate::services::yandex::VoiceAction::Track { title, .. } => title,
+                crate::services::yandex::VoiceAction::Rate(kind) => kind,
+                _ => "My Wave",
+            },
             Tool::SaveScript { name, .. } | Tool::RunScript { name, .. } => name,
+        }
+    }
+
+    pub fn signature(&self) -> String {
+        match self {
+            Tool::Yandex(action) => format!("{}:{action:?}", self.name()),
+            _ => format!("{}:{}", self.name(), self.detail()),
         }
     }
 
@@ -81,7 +96,11 @@ impl Tool {
         match self {
             Tool::Fetch(_) | Tool::Render(_) | Tool::Search(_) | Tool::ReadFile(_) => true,
             Tool::Cmd(t) | Tool::PowerShell(t) | Tool::Wsl(t) => t.to_ascii_lowercase().contains("http"),
-            Tool::WriteFile { .. } | Tool::Spotify { .. } | Tool::SaveScript { .. } | Tool::RunScript { .. } => false,
+            Tool::WriteFile { .. }
+            | Tool::Spotify { .. }
+            | Tool::Yandex(_)
+            | Tool::SaveScript { .. }
+            | Tool::RunScript { .. } => false,
         }
     }
 }
@@ -250,6 +269,7 @@ pub fn run(tool: &Tool) -> Result<String, String> {
         Tool::Fetch(url) => web::fetch(url),
         Tool::Render(url) => web::render(url),
         Tool::Spotify { query, kind, artist } => crate::services::spotify::play_search(query, kind, artist),
+        Tool::Yandex(action) => crate::services::yandex::voice(action.clone()).map_err(str::to_string),
         Tool::SaveScript { name, description, body } => {
             let dir = scripts_dir().ok_or("There is no profile folder")?;
             save_script_in(&dir, name, description, body)

@@ -18,7 +18,13 @@ pub struct Player {
 }
 
 impl Player {
-    pub fn open(url: &str, track: &Track, generation: u64, sender: SyncSender<Command>) -> windows::core::Result<Self> {
+    pub fn open(
+        url: &str,
+        track: &Track,
+        generation: u64,
+        sender: SyncSender<Command>,
+        volume: u8,
+    ) -> windows::core::Result<Self> {
         let inner = MediaPlayer::new()?;
         inner.CommandManager()?.SetIsEnabled(false)?;
         let controls = inner.SystemMediaTransportControls()?;
@@ -70,12 +76,17 @@ impl Player {
         }
         updater.Update()?;
         inner.SetSource(&MediaSource::CreateFromUri(&Uri::CreateUri(&HSTRING::from(url))?)?)?;
+        inner.SetVolume(f64::from(volume.min(100)) / 100.0)?;
         inner.Play()?;
         Ok(Self { inner, outcome })
     }
 
     pub fn outcome(&self) -> u8 {
         self.outcome.swap(0, Ordering::AcqRel)
+    }
+
+    pub fn set_volume(&self, volume: u8) -> windows::core::Result<()> {
+        self.inner.SetVolume(f64::from(volume.min(100)) / 100.0)
     }
 
     pub fn pause(&self) {
@@ -184,19 +195,18 @@ mod tests {
             session: String::new(),
             palette: Default::default(),
         };
-        let player = Player::open(&url, &track, 73, tx)?;
+        let player = Player::open(&url, &track, 73, tx, 37)?;
         let deadline = Instant::now() + Duration::from_secs(10);
         while !player.state().2 && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(30));
         }
         assert!(player.state().2, "native player did not start");
         assert!(player.state().1 > 1.5);
-        let source = "Night Island · Yandex Music";
-        let original = crate::platform::volume::app_volume(source).expect("missing native wave volume session");
-        assert!(crate::platform::volume::set_app_volume(source, 0.27));
-        let adjusted = crate::platform::volume::app_volume(source).unwrap();
-        crate::platform::volume::set_app_volume(source, original);
-        assert!((adjusted - 0.27).abs() < 0.001);
+        assert!((player.inner.Volume()? - 0.37).abs() < 0.001);
+        player.set_volume(0)?;
+        assert_eq!(player.inner.Volume()?, 0.0);
+        player.set_volume(27)?;
+        assert!((player.inner.Volume()? - 0.27).abs() < 0.001);
         let manager =
             windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.join()?;
         let deadline = Instant::now() + Duration::from_secs(5);

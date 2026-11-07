@@ -37,6 +37,7 @@ pub enum Action {
     PlayPause = 6,
     Next = 7,
     Dropped = 8,
+    Voice = 9,
 }
 
 impl Action {
@@ -50,6 +51,7 @@ impl Action {
             6 => Some(Self::PlayPause),
             7 => Some(Self::Next),
             8 => Some(Self::Dropped),
+            9 => Some(Self::Voice),
             _ => None,
         }
     }
@@ -79,6 +81,7 @@ struct State {
     drag: Option<Drag>,
     controls: HWND,
     docking: bool,
+    returning: Option<f32>,
     undock_guard: Option<UndockGuard>,
 }
 
@@ -182,6 +185,10 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
                 (*ptr).drag = None;
                 LRESULT(0)
             }
+            WM_MBUTTONUP => {
+                notify(hwnd, &*ptr, Action::Voice);
+                LRESULT(0)
+            }
             WM_RBUTTONUP => {
                 notify(hwnd, &*ptr, Action::ToggleIsland);
                 LRESULT(0)
@@ -275,8 +282,14 @@ impl CompanionWindow {
             let mut rect = RECT::default();
             let _ = GetWindowRect(parent, &mut rect);
             let position = on_screen(position.unwrap_or([rect.right + 12, rect.top]), side);
-            let mut state =
-                Box::new(State { parent, drag: None, controls: HWND::default(), docking: false, undock_guard: None });
+            let mut state = Box::new(State {
+                parent,
+                drag: None,
+                controls: HWND::default(),
+                docking: false,
+                returning: None,
+                undock_guard: None,
+            });
             let hwnd = CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
                 w!("NightIsland.Companion"),
@@ -322,6 +335,14 @@ impl CompanionWindow {
     pub fn center(&self) -> (f32, f32) {
         let [x, y] = self.position();
         (x as f32 + self.surface.side as f32 / 2.0, y as f32 + self.surface.side as f32 / 2.0)
+    }
+
+    pub fn notification_anchor(&self) -> (crate::view::Rect, crate::view::Rect) {
+        let (x, y) = self.center();
+        let side = self.surface.side as f32;
+        let source = (x - side * 0.29, y - side * 0.25, side * 0.58, side * 0.6);
+        let [left, top, right, bottom] = self.walking_bounds();
+        (source, (left, top, right + side, bottom + side))
     }
 
     pub fn walking_bounds(&self) -> [f32; 4] {
@@ -403,6 +424,41 @@ impl CompanionWindow {
 
     pub fn can_dock(&self) -> bool {
         self._state.undock_guard.as_ref().is_none_or(|guard| guard.left)
+    }
+
+    pub fn return_to(&mut self, center: (f32, f32), progress: f32) {
+        self._state.returning = Some(progress.clamp(0.0, 1.0));
+        self._state.docking = false;
+        let half = self.surface.side / 2;
+        unsafe {
+            let _ = ShowWindow(self._state.controls, SW_HIDE);
+            SetWindowLongPtrW(
+                self.hwnd,
+                GWL_EXSTYLE,
+                GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) | WS_EX_TRANSPARENT.0 as isize,
+            );
+            let _ = SetWindowPos(
+                self.hwnd,
+                None,
+                center.0.round() as i32 - half,
+                center.1.round() as i32 - half,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    pub fn cancel_return(&mut self) {
+        if self._state.returning.take().is_some() {
+            unsafe {
+                SetWindowLongPtrW(
+                    self.hwnd,
+                    GWL_EXSTYLE,
+                    GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) & !(WS_EX_TRANSPARENT.0 as isize),
+                );
+            }
+        }
     }
 
     pub fn set_docking(&mut self, docking: bool) -> bool {
@@ -526,13 +582,22 @@ impl CompanionWindow {
         }
         let mut drawn = Ok(());
         gpu.paint_dc(self.surface.mem, (side, side), |p| {
-            if self._state.docking {
+            if self._state.docking && self._state.returning.is_none() {
                 let inset = side as f32 * 0.12;
                 let rect = (inset, inset, side as f32 - inset, side as f32 - inset);
                 let _ = p.fill_round_rect(rect, side as f32 / 2.0, rgba(0.4, 0.9, 0.7, 0.15));
                 let _ = p.stroke_round_rect(rect, side as f32 / 2.0, 1.5 * scale, rgba(0.4, 0.95, 0.75, 0.85));
             }
-            let old = p.push_offset(side as f32 * 0.05, side as f32 * 0.1625);
+            let factor = 1.0 - 0.7 * self._state.returning.unwrap_or(0.0);
+            let shift = side as f32 * (1.0 - factor) / 2.0;
+            let old = p.push_offset(0.0, 0.0);
+            p.set_transform(&windows_numerics::Matrix3x2 {
+                M11: factor,
+                M22: factor,
+                M31: shift + side as f32 * 0.05 * factor,
+                M32: shift + side as f32 * 0.1625 * factor,
+                ..Default::default()
+            });
             drawn = characters::draw_with_design(p, character, side as f32 * 0.9, pose, design);
             p.set_transform(&old);
         })?;
@@ -541,7 +606,9 @@ impl CompanionWindow {
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
                 BlendFlags: 0,
-                SourceConstantAlpha: 255,
+                SourceConstantAlpha: ((1.0 - ((self._state.returning.unwrap_or(0.0) - 0.65) / 0.35).clamp(0.0, 1.0))
+                    * 255.0)
+                    .round() as u8,
                 AlphaFormat: AC_SRC_ALPHA as u8,
             };
             UpdateLayeredWindow(

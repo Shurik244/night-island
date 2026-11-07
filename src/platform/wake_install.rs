@@ -53,6 +53,14 @@ pub enum State {
 static STATE: Mutex<State> = Mutex::new(State::Idle);
 static BUSY: AtomicBool = AtomicBool::new(false);
 
+pub(super) fn begin_install() -> bool {
+    !BUSY.swap(true, Ordering::SeqCst)
+}
+
+pub(super) fn end_install() {
+    BUSY.store(false, Ordering::SeqCst);
+}
+
 pub fn state() -> State {
     STATE.lock().map_or(State::Idle, |s| *s)
 }
@@ -118,6 +126,9 @@ pub(crate) fn fetch(package: &Package) -> Result<Vec<u8>, &'static str> {
 
 fn install_to(root: &Path) -> Result<(), &'static str> {
     for (n, package) in PACKAGES.iter().enumerate() {
+        if n == 0 && super::localvoice::runtime_in(root) {
+            continue;
+        }
         set(State::Working(n as u8 * 50));
         let body = fetch(package)?;
         set(State::Working(n as u8 * 50 + 25));
@@ -135,12 +146,12 @@ pub fn root() -> Option<PathBuf> {
 }
 
 pub fn start(hwnd: HWND) -> bool {
-    if BUSY.swap(true, Ordering::SeqCst) {
+    if !begin_install() {
         return false;
     }
     let Some(root) = root() else {
-        BUSY.store(false, Ordering::SeqCst);
         set(State::Failed("No profile folder"));
+        end_install();
         return false;
     };
     let raw = hwnd.0 as isize;
@@ -150,7 +161,7 @@ pub fn start(hwnd: HWND) -> bool {
             Ok(()) => set(State::Ready),
             Err(why) => set(State::Failed(why)),
         }
-        BUSY.store(false, Ordering::SeqCst);
+        end_install();
         unsafe {
             let _ = PostMessageW(Some(HWND(raw as *mut c_void)), WM_WAKE_SETUP, WPARAM(0), LPARAM(0));
         }

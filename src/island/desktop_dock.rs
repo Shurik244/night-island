@@ -4,12 +4,26 @@ use crate::platform::desktop_dock as desktop;
 use crate::ui::desktop_dock::{Dock, Request, WM_DESKTOP_DOCK};
 use crate::ui::i18n::tr;
 
+const IMPORT_TASKBAR: usize = 28;
+const MEMORY_MANAGER: usize = 29;
+
 impl App {
     pub(in crate::island) fn configure_desktop_dock(&mut self) {
         if !self.settings.desktop_dock.enabled {
             self.desktop_dock.take();
-            self.windows_taskbar.take();
+            self.configure_taskbar_replacement();
             return;
+        }
+        if !self.settings.desktop_dock.taskbar_imported {
+            let untouched = self.settings.desktop_dock.pins.is_empty()
+                || self.settings.desktop_dock.pins == crate::data::desktop_dock::DockSettings::default().pins;
+            if untouched {
+                crate::platform::taskbar_pins::start(self.hwnd, false);
+            } else {
+                self.settings.desktop_dock.taskbar_imported = true;
+                self.ui.cfg.desktop_dock.taskbar_imported = true;
+                self.settings.save();
+            }
         }
         if let Some(dock) = &mut self.desktop_dock {
             dock.update(&self.settings.desktop_dock);
@@ -30,13 +44,19 @@ impl App {
         self.configure_taskbar_replacement();
     }
 
-    fn configure_taskbar_replacement(&mut self) {
+    pub(in crate::island) fn configure_taskbar_replacement(&mut self) {
         if self.desktop_dock.is_some() && self.settings.desktop_dock.replace_taskbar {
-            if self.windows_taskbar.is_none() {
-                self.windows_taskbar = crate::platform::taskbar::TaskbarGuard::start().ok();
+            if self.windows_taskbar.as_mut().is_none_or(|guard| !guard.running()) {
+                self.windows_taskbar.take();
+                match crate::platform::taskbar::TaskbarGuard::start() {
+                    Ok(guard) => self.windows_taskbar = Some(guard),
+                    Err(error) => crate::log_warn!("Could not start taskbar replacement: {error}"),
+                }
             }
+            self.set_timer(Timer::Taskbar, 2000);
         } else {
             self.windows_taskbar.take();
+            self.kill_timer(Timer::Taskbar);
         }
     }
 
@@ -52,11 +72,15 @@ impl App {
 
     pub(in crate::island) fn desktop_dock_setting(&mut self, id: view::Sid) {
         match id {
-            view::Sid::DockAdd | view::Sid::DockImport => unsafe {
+            view::Sid::DockAdd | view::Sid::DockImport | view::Sid::DockImportTaskbar => unsafe {
                 let _ = PostMessageW(
                     Some(self.hwnd),
                     WM_DESKTOP_DOCK,
-                    WPARAM(if id == view::Sid::DockAdd { 1 } else { 2 }),
+                    WPARAM(match id {
+                        view::Sid::DockAdd => 1,
+                        view::Sid::DockImportTaskbar => crate::platform::taskbar_pins::REQUEST_IMPORT,
+                        _ => 2,
+                    }),
                     LPARAM(0),
                 );
             },
@@ -327,6 +351,7 @@ fn dock_context(entry: Option<&crate::ui::desktop_dock::Entry>) -> Option<usize>
         } else {
             items.push(Entry::info("Night Island Dock"));
             items.push(Entry::info(&format!("{}: {}", tr("Pinned applications"), config.pins.len())));
+            items.push(Entry::item(IMPORT_TASKBAR, &tr("Import Windows taskbar pins")).glyph('\u{E8B5}'));
             items.push(Entry::item(22, &tr("Import applications from MyDockFinder")).glyph('\u{E8B5}'));
             items.push(
                 Entry::item(23, &tr(if config.auto_hide { "Keep dock visible" } else { "Auto-hide dock" }))
@@ -334,6 +359,9 @@ fn dock_context(entry: Option<&crate::ui::desktop_dock::Entry>) -> Option<usize>
             );
         }
         if entry.is_none() || page == 1 {
+            if with_app_value(|a| a.settings.memory_tools).unwrap_or(false) {
+                items.push(Entry::item(MEMORY_MANAGER, &tr("Memory manager")).glyph('\u{E964}'));
+            }
             items.push(Entry::item(5, &tr("Add application or file")).glyph('\u{E710}'));
             items.push(Entry::item(6, &tr("Desktop dock settings")).glyph('\u{E713}'));
             items.push(Entry::item(7, &tr("Island settings")).glyph('\u{E80F}'));
@@ -353,6 +381,37 @@ fn dock_context(entry: Option<&crate::ui::desktop_dock::Entry>) -> Option<usize>
 }
 
 pub(in crate::island) fn handle_request(hwnd: HWND, command: usize) {
+    if command == crate::platform::taskbar_pins::REQUEST_IMPORT {
+        crate::platform::taskbar_pins::start(hwnd, true);
+        return;
+    }
+    if command == crate::platform::taskbar_pins::IMPORT_READY {
+        if let Some(result) = crate::platform::taskbar_pins::take() {
+            with_app(|a| {
+                let untouched = a.settings.desktop_dock.pins.is_empty()
+                    || a.settings.desktop_dock.pins == crate::data::desktop_dock::DockSettings::default().pins;
+                let mut added = 0;
+                if result.manual || untouched {
+                    let mut seen: std::collections::HashSet<_> = a
+                        .settings
+                        .desktop_dock
+                        .pins
+                        .iter()
+                        .map(|pin| key(&desktop::resolved_target(&pin.target)))
+                        .collect();
+                    for (pin, target) in result.pins {
+                        if seen.insert(key(&target)) {
+                            added += usize::from(a.settings.desktop_dock.add(pin));
+                        }
+                    }
+                }
+                a.settings.desktop_dock.taskbar_imported = true;
+                a.ui.sw.dock_status = format!("{}: {added}", tr("Imported applications"));
+                a.save_desktop_dock();
+            });
+        }
+        return;
+    }
     if command == 1 {
         add_file(hwnd);
         return;
@@ -539,6 +598,13 @@ pub(in crate::island) fn handle_request(hwnd: HWND, command: usize) {
                     }
                 }
                 Some(22) => import_dock(hwnd),
+                Some(IMPORT_TASKBAR) => crate::platform::taskbar_pins::start(hwnd, true),
+                Some(MEMORY_MANAGER) => with_app(|a| {
+                    if let Some(group) = view::GROUPS.iter().position(|g| g.name == "System") {
+                        a.open_settings_at(group);
+                        a.open_memory_tools();
+                    }
+                }),
                 Some(23) => with_app(|a| {
                     a.settings.desktop_dock.auto_hide = !a.settings.desktop_dock.auto_hide;
                     a.save_desktop_dock();

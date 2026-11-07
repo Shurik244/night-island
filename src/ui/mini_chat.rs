@@ -23,9 +23,13 @@ pub const PET: usize = 4;
 pub const PET_APPLY: usize = 5;
 pub const PET_PHOTO: usize = 6;
 pub const PET_TEXT: usize = 7;
+pub const PET_BODY: usize = 8;
+pub const VOICE: usize = 9;
+pub const VOICE_CANCEL: usize = 10;
 
 fn pet_action(action: view::PetStudioHit) -> usize {
     match action {
+        view::PetStudioHit::Body => PET_BODY,
         view::PetStudioHit::Apply => PET_APPLY,
         view::PetStudioHit::Photo => PET_PHOTO,
         view::PetStudioHit::TextOnly => PET_TEXT,
@@ -56,6 +60,7 @@ impl State {
     fn sync_preview_timer(&self, hwnd: HWND) {
         unsafe {
             if self.ui.active
+                && self.drag.is_none()
                 && self.closing.is_none()
                 && IsWindowVisible(hwnd).as_bool()
                 && let Some(interval) = self.ui.chat.pet.preview_interval()
@@ -78,7 +83,7 @@ impl State {
         {
             return view::hit_pet_studio(layout.history, self.scale, (x, y), &self.ui.chat.pet).map(Hit::PetAction);
         }
-        view::hit_companion_chat(&layout, x, y)
+        view::hit_companion_chat(&layout, x, y).filter(|hit| *hit != Hit::Voice || self.ui.voice_enabled)
     }
 
     fn can_send(&self) -> bool {
@@ -163,13 +168,18 @@ impl State {
         let down = |key: VIRTUAL_KEY| unsafe { GetKeyState(key.0 as i32) < 0 };
         let (ctrl, shift) = (down(VK_CONTROL), down(VK_SHIFT));
         if vk == VK_ESCAPE.0 {
+            self.notify(hwnd, VOICE_CANCEL);
             self.close(hwnd);
             return;
         }
         if vk == VK_TAB.0 {
-            let mut order = vec![Hit::Input, Hit::Send, Hit::Pet, Hit::Setup, Hit::Close];
+            let mut order = vec![Hit::Input, Hit::Send, Hit::Voice, Hit::Pet, Hit::Setup, Hit::Close];
+            if !self.ui.voice_enabled {
+                order.retain(|hit| *hit != Hit::Voice);
+            }
             if self.ui.chat.pet.enabled {
                 order.extend([
+                    Hit::PetAction(view::PetStudioHit::Body),
                     Hit::PetAction(view::PetStudioHit::Apply),
                     Hit::PetAction(view::PetStudioHit::Photo),
                     Hit::PetAction(view::PetStudioHit::TextOnly),
@@ -185,6 +195,7 @@ impl State {
                     self.ui.focus = Hit::Input;
                     self.notify(hwnd, SEND);
                 }
+                Hit::Voice => self.notify(hwnd, VOICE),
                 Hit::Setup => self.notify(hwnd, SETUP),
                 Hit::Pet => self.notify(hwnd, PET),
                 Hit::PetAction(action) => self.notify(hwnd, pet_action(action)),
@@ -297,6 +308,9 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                 LRESULT(0)
             }
             WM_TIMER => {
+                if state.drag.is_some() && matches!(wp.0, CARET | PREVIEW) {
+                    return LRESULT(0);
+                }
                 if wp.0 == PREVIEW
                     && (!state.ui.active
                         || state.ui.chat.pet.preview_interval().is_none()
@@ -356,6 +370,7 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                         let mut rect = RECT::default();
                         if GetCursorPos(&mut cursor).is_ok() && GetWindowRect(hwnd, &mut rect).is_ok() {
                             state.drag = Some((cursor, rect, hit == Some(Hit::Resize)));
+                            state.sync_preview_timer(hwnd);
                             SetCapture(hwnd);
                         }
                     }
@@ -409,6 +424,7 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                                 height,
                                 SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
                             );
+                            state.redraw(hwnd);
                         } else {
                             let _ = SetWindowPos(
                                 hwnd,
@@ -421,6 +437,7 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                             );
                         }
                     }
+                    return LRESULT(0);
                 }
                 if state.selecting
                     && let Some(layout) = state.input_layout()
@@ -461,10 +478,12 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                 state.selecting = false;
                 state.reading = false;
                 let _ = ReleaseCapture();
+                state.sync_preview_timer(hwnd);
                 let (x, y) = point();
                 if !dragged && pressed == state.hit(x, y) {
                     match pressed {
                         Some(Hit::Close) => state.close(hwnd),
+                        Some(Hit::Voice) => state.notify(hwnd, VOICE),
                         Some(Hit::Setup) => state.notify(hwnd, SETUP),
                         Some(Hit::Pet) => state.notify(hwnd, PET),
                         Some(Hit::PetAction(action)) => state.notify(hwnd, pet_action(action)),
@@ -483,6 +502,7 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                 state.selecting = false;
                 state.reading = false;
                 state.pressed = None;
+                state.sync_preview_timer(hwnd);
                 LRESULT(0)
             }
             WM_MOUSEWHEEL => {
@@ -524,7 +544,7 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                 let cursor = match state.ui.hover {
                     Some(Hit::Input | Hit::History) => IDC_IBEAM,
                     Some(Hit::Resize) => IDC_SIZENWSE,
-                    Some(Hit::Send | Hit::Setup | Hit::Close) => IDC_HAND,
+                    Some(Hit::Send | Hit::Voice | Hit::Setup | Hit::Close) => IDC_HAND,
                     _ => IDC_ARROW,
                 };
                 SetCursor(LoadCursorW(None, cursor).ok());
@@ -679,6 +699,15 @@ impl MiniChatWindow {
         unsafe {
             let _ = SetWindowDisplayAffinity(self.hwnd, if hidden { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE });
         }
+    }
+
+    pub fn set_voice_enabled(&mut self, enabled: bool) {
+        let mut state = self.state.borrow_mut();
+        state.ui.voice_enabled = enabled;
+        if !enabled && state.ui.focus == Hit::Voice {
+            state.ui.focus = Hit::Input;
+        }
+        state.redraw(self.hwnd);
     }
 
     pub fn repaint(&mut self) {
@@ -913,6 +942,43 @@ mod tests {
         studio.preview_started = None;
         chat.update_pet(&studio, &design, Character::Custom);
         chat.set_input("Добавь синий шарф");
+        let (before, storage) = {
+            let mut state = chat.state.borrow_mut();
+            let mut cursor = POINT::default();
+            let mut rect = RECT::default();
+            unsafe {
+                GetCursorPos(&mut cursor)?;
+                GetWindowRect(chat.hwnd(), &mut rect)?;
+            }
+            state.drag = Some((cursor, rect, false));
+            (state.surface.pixels(), state.surface.storage_id())
+        };
+        for _ in 0..20 {
+            proc(chat.hwnd(), WM_MOUSEMOVE, WPARAM(0), LPARAM(0));
+            proc(chat.hwnd(), WM_TIMER, WPARAM(PREVIEW), LPARAM(0));
+        }
+        assert_eq!(
+            chat.state.borrow().surface.pixels(),
+            before,
+            "Dragging must reuse the existing portrait and text bitmap"
+        );
+        assert_eq!(chat.state.borrow().surface.storage_id(), storage);
+        let old_size = chat.state.borrow().size;
+        {
+            let mut state = chat.state.borrow_mut();
+            let mut cursor = POINT::default();
+            let mut rect = RECT::default();
+            unsafe {
+                GetCursorPos(&mut cursor)?;
+                GetWindowRect(chat.hwnd(), &mut rect)?;
+            }
+            rect.right += 20;
+            state.drag = Some((cursor, rect, true));
+        }
+        proc(chat.hwnd(), WM_MOUSEMOVE, WPARAM(0), LPARAM(0));
+        assert_eq!(chat.state.borrow().size.0, old_size.0 + 20, "Resizing must still redraw at the new dimensions");
+        proc(chat.hwnd(), WM_CAPTURECHANGED, WPARAM(0), LPARAM(0));
+        assert!(chat.state.borrow().drag.is_none());
         for (size, scale) in [((416, 460), 1.0), ((360, 360), 1.0), ((624, 690), 1.5)] {
             unsafe {
                 let _ =

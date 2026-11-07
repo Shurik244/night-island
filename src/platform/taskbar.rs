@@ -16,6 +16,10 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub struct TaskbarGuard(Child);
 
 impl TaskbarGuard {
+    pub fn running(&mut self) -> bool {
+        matches!(self.0.try_wait(), Ok(None))
+    }
+
     pub fn start() -> std::io::Result<Self> {
         Command::new(std::env::current_exe()?)
             .arg("--island-taskbar-guard")
@@ -80,21 +84,27 @@ impl Drop for Region {
 }
 
 struct HiddenTaskbars {
-    state: usize,
+    state: Option<usize>,
     owned_state: usize,
     hidden: Vec<(HWND, u32, RECT, Region)>,
 }
 
 impl HiddenTaskbars {
     fn new() -> Self {
+        Self { state: None, owned_state: 0, hidden: Vec::new() }
+    }
+
+    fn claim_state(&mut self) {
         let mut data = APPBARDATA { cbSize: size_of::<APPBARDATA>() as u32, ..Default::default() };
-        let state = unsafe { SHAppBarMessage(ABM_GETSTATE, &mut data) };
-        let owned_state = state | ABS_AUTOHIDE as usize;
-        data.lParam = LPARAM(owned_state as isize);
-        unsafe {
-            SHAppBarMessage(ABM_SETSTATE, &mut data);
+        let current = unsafe { SHAppBarMessage(ABM_GETSTATE, &mut data) };
+        let original = *self.state.get_or_insert(current);
+        self.owned_state = original | ABS_AUTOHIDE as usize;
+        if current != self.owned_state {
+            data.lParam = LPARAM(self.owned_state as isize);
+            unsafe {
+                SHAppBarMessage(ABM_SETSTATE, &mut data);
+            }
         }
-        Self { state, owned_state, hidden: Vec::new() }
     }
 
     fn refresh(&mut self) {
@@ -103,7 +113,11 @@ impl HiddenTaskbars {
             GetWindowThreadProcessId(*hwnd, Some(&mut current));
             IsWindow(Some(*hwnd)).as_bool() && current == *pid
         });
-        for hwnd in taskbars() {
+        let windows = taskbars();
+        if !windows.is_empty() {
+            self.claim_state();
+        }
+        for hwnd in windows {
             unsafe {
                 if !GetPropW(hwnd, windows::core::w!("NightIsland.TrayAccess")).0.is_null() {
                     continue;
@@ -149,8 +163,10 @@ impl Drop for HiddenTaskbars {
                 }
             }
             let mut data = APPBARDATA { cbSize: size_of::<APPBARDATA>() as u32, ..Default::default() };
-            if SHAppBarMessage(ABM_GETSTATE, &mut data) == self.owned_state {
-                data.lParam = LPARAM(self.state as isize);
+            if let Some(state) = self.state
+                && SHAppBarMessage(ABM_GETSTATE, &mut data) == self.owned_state
+            {
+                data.lParam = LPARAM(state as isize);
                 SHAppBarMessage(ABM_SETSTATE, &mut data);
             }
         }
@@ -243,7 +259,22 @@ mod tests {
         let state = unsafe { SHAppBarMessage(ABM_GETSTATE, &mut data) };
         {
             let mut guard = HiddenTaskbars::new();
+            assert!(guard.state.is_none());
+            assert_eq!(unsafe { SHAppBarMessage(ABM_GETSTATE, &mut data) }, state);
             guard.refresh();
+            assert!(visible.iter().all(|hwnd| unsafe { !IsWindowVisible(*hwnd).as_bool() }));
+            assert_eq!(unsafe { SHAppBarMessage(ABM_GETSTATE, &mut data) }, state | ABS_AUTOHIDE as usize);
+            data.lParam = LPARAM(state as isize);
+            unsafe {
+                SHAppBarMessage(ABM_SETSTATE, &mut data);
+            }
+            for hwnd in &visible {
+                unsafe {
+                    let _ = ShowWindow(*hwnd, SW_SHOWNOACTIVATE);
+                }
+            }
+            guard.refresh();
+            assert_eq!(guard.state, Some(state));
             assert!(visible.iter().all(|hwnd| unsafe { !IsWindowVisible(*hwnd).as_bool() }));
             assert_eq!(unsafe { SHAppBarMessage(ABM_GETSTATE, &mut data) }, state | ABS_AUTOHIDE as usize);
         }

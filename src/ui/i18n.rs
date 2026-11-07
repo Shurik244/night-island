@@ -28,6 +28,48 @@ pub fn is_ru() -> bool {
 
 fn phrase(s: &str) -> Option<&'static str> {
     Some(match s {
+        "Turn off balanced layout or smooth equalizer to use their classic appearance." => {
+            "Выключите новые размеры или плавный эквалайзер, чтобы вернуть прежний вид."
+        }
+        "Balanced pill layout" => "Единые размеры и отступы в пилюле",
+        "Smooth liquid equalizer" => "Плавная жидкая форма эквалайзера",
+        "Liquid equalizer response" => "Реакция жидкого эквалайзера",
+        "Calm" => "Спокойная",
+        "Responsive" => "Отзывчивая",
+        "Energetic" => "Энергичная",
+        "Calm keeps the previous liquid response. Responsive follows beats faster; Energetic adds more movement." => {
+            "Спокойная — прежняя реакция. Отзывчивая быстрее следует ритму, энергичная усиливает движение."
+        }
+        "Load a font file to replace Segoe UI in the preview." => {
+            "Загрузите файл шрифта. Пока в предпросмотре — Segoe UI."
+        }
+        "Custom font" => "Свой шрифт",
+        "Load your font…" => "Загрузить свой шрифт…",
+        "Loading font…" => "Загрузка шрифта…",
+        "Download font" => "Скачать шрифт",
+        "SF Pro website (macOS package)" => "Сайт SF Pro (пакет macOS)",
+        "Apple provides a DMG package. Import a TTF or OTF file, not the DMG." => {
+            "Apple выдаёт пакет DMG. Для импорта нужен файл TTF или OTF из пакета."
+        }
+        "Download opens the official font website." => "Скачать шрифт — открыть официальный сайт.",
+        "TTF, OTF or TTC, up to 16 MB. The font is saved in Island." => {
+            "TTF, OTF или TTC, до 16 МБ. Шрифт сохранится в Island."
+        }
+        "SF Pro is not installed. The preview currently uses Segoe UI." => {
+            "SF Pro не установлен. Сейчас в предпросмотре — Segoe UI."
+        }
+        "Font loaded and saved" => "Шрифт загружен и сохранён",
+        "Choose a TTF, OTF or TTC font file" => "Выберите файл шрифта TTF, OTF или TTC",
+        "Could not read the font file" => "Не удалось прочитать файл шрифта",
+        "Font files must be between 1 byte and 16 MB" => "Нужен непустой файл шрифта размером до 16 МБ",
+        "Could not load the font" => "Не удалось загрузить шрифт",
+        "This file is not a supported font" => "Файл повреждён или формат шрифта не поддерживается",
+        "Could not save the font" => "Не удалось сохранить шрифт",
+        "Interface font" => "Шрифт интерфейса",
+        "SF Pro (not installed)" => "SF Pro (не установлен)",
+        "Montserrat is included. SF Pro requires an installed font; otherwise Segoe UI is used." => {
+            "Montserrat встроен. SF Pro — если установлен, иначе используется Segoe UI."
+        }
         "Close" => "Закрыть",
         "Mixer" => "Микшер",
         "Minimize" => "Свернуть",
@@ -95,6 +137,26 @@ fn phrase(s: &str) -> Option<&'static str> {
             "Панель задач Windows возвращается при выключении дока или выходе из Island."
         }
         "Top panel" => "Верхняя панель",
+        "Panel entrance" => "Откуда появляются панели",
+        "From the island" => "Из острова",
+        "From screen sides" => "С боковых краёв экрана",
+        "From the top edge" => "Из верхнего края экрана",
+        "Distance from the island" => "Расстояние от острова",
+        "Panel animation duration" => "Длительность появления",
+        "Liquid panel edges" => "Жидкие края панелей",
+        "Pet reacts to voice assistant" => "Питомец реагирует на голосового помощника",
+        "Body" => "Форма",
+        "Fox" => "Лиса",
+        "Rabbit" => "Кролик",
+        "Ghost" => "Призрак",
+        "Cat" => "Кот",
+        "Robot" => "Робот",
+        "Island mode places the panels beside the island. Edge modes keep them in the screen corners." => {
+            "В режиме «Из острова» панели рядом с ним. В режимах от краёв — в углах экрана."
+        }
+        "Start dictation with the shortcut in Keys. Your pet listens and waits with the assistant." => {
+            "Начните диктовку сочетанием из раздела «Клавиши». Питомец прислушается и дождётся ответа вместе с помощником."
+        }
         "Animate panel interactions" => "Анимации верхней панели",
         "Animate dock interactions" => "Анимации нижнего дока",
         "Separate pinned and running applications" => "Разделять закреплённые и запущенные",
@@ -340,6 +402,357 @@ fn phrase(s: &str) -> Option<&'static str> {
         "Loading music…" => "Загружаем…",
 
         "My Wave" => "Моя волна",
+        "Music volume" => "Громкость музыки",
+        "Liked tracks" => "Мне нравится",
+        "Track search in My Wave" => "Поиск треков в «Моей волне»",
+        "Search tracks" => "Поиск",
+        "Track title or artist" => "Название трека или исполнитель",
+        "Press Enter to try again" => "Нажми Enter, чтобы повторить",
+        "No tracks found. Try another title or artist." => "Треки не найдены. Попробуй другое название или имя.",
+        "Searching Yandex Music…" => "Ищу в Яндекс Музыке…",
+        "Remove like" => "Убрать лайк",
+        "Remove dislike" => "Убрать дизлайк",
+        "Dislike and skip" => "Дизлайк и следующий трек",
+        "Yandex Music volume" => "Громкость Яндекс Музыки",
+        "Liked tracks and ratings in My Wave" => "«Мне нравится» и оценки треков",
+        "Loading liked tracks…" => "Загружаю любимые треки…",
+        "No liked tracks yet" => "Пока нет понравившихся треков",
+        "No available tracks on this page" => "На этой странице нет доступных треков",
+        "Could not load liked tracks" => "Не удалось загрузить любимые треки",
+        "Could not change My Wave volume" => "Не удалось изменить громкость Моей волны",
+        "Start with Island" => "Запускать с Island",
+        "Notification" => "Уведомление",
+        "Talk to the detached pet" => "Разговор с вынесенным питомцем",
+        "Icons beside tab names" => "Иконки рядом с названиями вкладок",
+        "Colored header icons" => "Цветные иконки в шапке",
+        "Present each new track" => "Показывать обложку и название при смене трека",
+        "Pet watches the new track" => "Питомец с интересом смотрит на новый трек",
+        "Island welcomes the returning pet" => "Плавно втягивать питомца в остров",
+        "Idle wave travels along the edge" => "Фоновая волна движется вдоль края",
+        "Expressive active tab" => "Выразительное выделение активной вкладки",
+        "Show AI answers as cards" => "Показывать ответы ИИ карточками",
+        "Short AI replies inside the island" => "Короткие ответы ИИ внутри острова",
+        "Long replies use cards. Detached pet replies stay beside the pet." => {
+            "Длинные ответы — в карточках. У вынесенного питомца ответы остаются рядом с ним."
+        }
+        "Size cards to fit their content" => "Размер карточек по содержимому",
+        "Show cards by the detached pet" => "Показывать карточки у вынесенного питомца",
+        "Voice commands for My Wave" => "Голосовые команды для Моей волны",
+        "Quick tour" => "Быстрый старт",
+        "Open quick tour" => "Открыть быстрый старт",
+        "Workspace" => "Рабочий стол",
+        "Preset" => "Пресет",
+        "Essentials" => "Основное",
+        "Pick the features you want to use." => "Включи то, что нужно каждый день.",
+        "Assistant access" => "Доступ ассистента",
+        "Track lyrics" => "Текст песен",
+        "Keep current permissions" => "Оставить текущий доступ",
+        "Basic access" => "Базовый доступ",
+        "Ask before actions" => "С подтверждением",
+        "Full access" => "Полный доступ",
+        "Keep the access already configured for each tool." => "Сохранить разрешения для каждого инструмента.",
+        "Music, reminders and apps. Files and terminal stay locked." => {
+            "Музыка, напоминания и приложения. Файлы и терминал закрыты."
+        }
+        "Allow all tools and confirm actions before they run." => {
+            "Разрешить инструменты и подтверждать действия перед запуском."
+        }
+        "Allow files, terminal, browser and screen without routine prompts." => {
+            "Файлы, терминал, браузер и экран без обычных запросов."
+        }
+        "You can adjust individual permissions in Settings." => "Разрешения по отдельности доступны в настройках.",
+        "Windows may ask for notification access." => "Windows может запросить доступ при применении.",
+        "Ready" => "Готово",
+        "Workspace preview" => "Так будет выглядеть Island",
+        "On your desktop" => "На рабочем столе",
+        "Make Island yours" => "Настрой под себя",
+        "Start with the essentials or explore everything with a guide." => {
+            "Выбери быстрый старт или пройди настройку вместе с нами."
+        }
+        "Quick setup" => "Быстрый старт",
+        "Guided setup" => "Подробно",
+        "About 1 minute" => "Около 1 минуты",
+        "About 5 minutes" => "Около 5 минут",
+        "Layout, essential switches and assistant permissions." => "Пресет, главные настройки и доступ ассистента.",
+        "Everything in quick setup, hands-on practice, pet and voice models." => {
+            "Всё из быстрого старта, практика, питомец и голосовые модели."
+        }
+        "Change route" => "Сменить маршрут",
+        "Explore and set up voice" => "Попробовать функции и настроить голос",
+        "Try it" => "Практика",
+        "Try the real island" => "Попробуй остров",
+        "These are the same controls you will use on your desktop. Try them here." => {
+            "Это те же элементы, что на рабочем столе. Попробуй их прямо здесь."
+        }
+        "Live island preview" => "Остров в миниатюре",
+        "Music and volume" => "Музыка и громкость",
+        "Incoming notifications" => "Входящие уведомления",
+        "A pet on your desktop" => "Питомец на рабочем столе",
+        "Try pause, next track and the volume slider." => "Попробуй паузу, переключение трека и громкость.",
+        "Close the card with the cross, then try again." => "Закрой карточку крестиком и покажи её снова.",
+        "Drag your pet out. Bring it back to the island." => "Вытащи питомца мышью. Перенеси обратно на остров.",
+        "Sample track · no audio" => "Демо-трек · без звука",
+        "Night walk" => "Ночная прогулка",
+        "Quiet morning" => "Тихое утро",
+        "City lights" => "Огни города",
+        "More tools are available after setup." => "Остальные инструменты доступны после настройки.",
+        "Back on the island." => "Питомец вернулся на остров.",
+        "Notification dismissed" => "Уведомление закрыто",
+        "Show the add button in the dock" => "Показывать кнопку добавления в доке",
+        "Import Windows taskbar pins" => "Импортировать ярлыки панели задач Windows",
+        "Drop an app here or right-click to add" => "Перетащи приложение или добавь через ПКМ",
+        "Sort by growth" => "Сначала растущие",
+        "Refresh" => "Обновить",
+        "Now" => "Сейчас",
+        "Select minimized apps" => "Выбери свёрнутые приложения",
+        "Memory manager" => "Управление памятью",
+        "Free memory and watch applications" => "Освободить ОЗУ и посмотреть расход",
+        "Minimize apps you are not using, then choose which ones to clean. Apps stay open." => {
+            "Сверни ненужные сейчас приложения и выбери, какие очистить. Они останутся открыты."
+        }
+        "Could not read memory usage. Try refreshing." => "Не удалось прочитать расход памяти. Нажми «Обновить».",
+        "Free at cleanup" => "Свободно при очистке",
+        "Free memory" => "Свободно в системе",
+        "Reading running applications…" => "Проверяю запущенные приложения…",
+        "RAM / after / growth" => "Сейчас / после / рост",
+        "In use · skipped" => "Используется · пропускаем",
+        "No accessible desktop apps found." => "Доступные приложения с окнами не найдены.",
+        "Free selected memory" => "Освободить выбранную память",
+        "Watch regrowth for 2 minutes" => "Наблюдать за ростом расхода 2 минуты",
+        "Exclude" => "Исключить",
+        "Excluded" => "Исключено",
+        "Processes cleaned" => "Обработано процессов",
+        "Skipped" => "Пропущено",
+        "Watching regrowth" => "Наблюдаем за ростом",
+        "Observation finished" => "Наблюдение завершено",
+        "Windows may load these pages again when apps need them." => {
+            "Windows может вернуть данные в ОЗУ, когда приложениям они понадобятся."
+        }
+        "Keep my layout" => "Оставить как есть",
+        "Island only" => "Только остров",
+        "Island and dock" => "Остров и док",
+        "Full workspace" => "Полный комплект",
+        "Use the panels you already have." => "Сохранить текущий набор панелей.",
+        "A compact island and the Windows taskbar." => "Компактный остров и панель задач Windows.",
+        "Add an auto-hiding app dock." => "Добавить док с автоскрытием.",
+        "Add the dock and system controls at the top." => "Добавить док и системные кнопки сверху.",
+        "Wake-word model" => "Модель слова-вызова",
+        "Local voice (Piper)" => "Локальный голос Piper",
+        "Local detection · about 46 MB" => "Голосовой вызов · около 46 МБ",
+        "Offline speech · up to 44 MB" => "Озвучка без сети · до 44 МБ",
+        "Skip setup" => "Пропустить мастер",
+        "Apply and finish" => "Применить и начать",
+        "Continue" => "Продолжить",
+        "Suggest names" => "Предложить клички",
+        "Connect speech recognition" => "Подключить распознавание речи",
+        "Connect an AI service" => "Подключить нейросеть",
+        "Download" => "Скачать",
+        "Retry" => "Повторить",
+        "Enable" => "Включить",
+        "New messages can appear here while you work." => "Новые сообщения могут появляться здесь, пока ты работаешь.",
+        "Drag Spark off the island to let it roam." => "Перетащи Спарка с острова, чтобы выпустить его.",
+        "Downloading model…" => "Скачиваю модель…",
+        "Installed" => "Установлено",
+        "Download failed" => "Скачать не удалось",
+        "You can continue while the model downloads." => "Можно продолжить, пока модель скачивается.",
+        "Both downloads are optional." => "Обе модели можно скачать и позже.",
+        "Grant access from the Notifications tab." => "Доступ можно выдать во вкладке «Уведомления».",
+        "Wake-word listening is selected." => "Выбран запуск ассистента по кличке.",
+        "Voice services are connected." => "Голосовые сервисы подключены.",
+        "Configure speech service" => "Настроить сервис речи",
+        "Use this if your AI service cannot recognize speech." => "Включи, если твой ИИ не распознаёт речь.",
+        "A speech API key is available." => "Ключ для распознавания есть.",
+        "Set the speech server and API key." => "Укажи сервер и ключ для распознавания.",
+        "Finish setup to activate the separate speech service." => {
+            "Заверши онбординг, чтобы включить отдельный сервис речи."
+        }
+        "Connect voice services later under Assistant." => "Подключить голос можно позже в «Ассистенте».",
+        "Choose your layout" => "Выбери пресет",
+        "Pick a preset to see how it looks. It applies when you finish." => {
+            "Посмотри, как выглядят готовые варианты. Выбор применится в конце."
+        }
+        "Make it respond to you" => "Настрой голос",
+        "Give the assistant a name and download the voice models you want." => {
+            "Придумай клички ассистенту и скачай нужные модели прямо здесь."
+        }
+        "Ready to use Island" => "Остров готов",
+        "Check your choices and apply them. You can change them later in Settings." => {
+            "Проверь выбор и примени его. Позже всё можно поменять в настройках."
+        }
+        "Enter distinct names of up to 24 characters." => "Введи разные клички до 24 символов каждая.",
+        "Use two different-sounding names, separated by commas." => "Два разных на слух слова через запятую.",
+        "Voice commands also need AI and speech recognition." => "Для команд нужны нейросеть и распознавание речи.",
+        "Another voice model is being downloaded" => "Уже скачивается голосовая модель",
+        "Resume quick tour" => "Продолжить знакомство",
+        "The island" => "Остров",
+        "Tools" => "Инструменты",
+        "Pet" => "Питомец",
+        "Welcome to Night Island" => "Добро пожаловать в Night Island",
+        "An island on your desktop" => "Остров на твоём экране",
+        "Music, messages and a little companion. All from a small island at the edge of your screen." => {
+            "Музыка, сообщения и маленький питомец на острове у края экрана."
+        }
+        "Your desktop" => "Твой рабочий стол",
+        "Home preview" => "Главная на острове",
+        "Desktop preview" => "Панели на экране",
+        "Notification preview" => "Карточка на острове",
+        "Voice preview" => "Голосовой сценарий",
+        "Meet Spark" => "Знакомься, Спарк",
+        "Drag Spark to try it" => "Попробуй перетащить Спарка мышью",
+        "Demo mode" => "Демонстрация",
+        "Start the tour" => "Начать знакомство",
+        "About 2 minutes" => "Около 2 минут",
+        "Tap the island to open it" => "Нажми на остров, чтобы раскрыть его",
+        "On your desktop it opens on hover" => "На рабочем столе достаточно навести курсор",
+        "Tap the dock to preview a window" => "Нажми на док, чтобы увидеть предпросмотр окна",
+        "Send yourself a sample card" => "Попробуй показать карточку",
+        "Try a voice command" => "Попробовать команду",
+        "Example only · microphone off" => "Пример · микрофон выключен",
+        "Remind me in ten minutes." => "Напомни мне через десять минут.",
+        "Open on hover" => "Раскрытие по наведению",
+        "Move the pointer over the island to open it. Move away to close it." => {
+            "Наведи курсор на остров, чтобы открыть его. Уведи курсор, чтобы свернуть."
+        }
+        "Keep it open" => "Закрепление",
+        "Use the pin when you want the panel to stay open." => "Нажми на булавку, чтобы оставить панель раскрытой.",
+        "Make it yours" => "Остров под себя",
+        "Adjust the position, shape and animation in Settings." => "Положение, форма и анимация меняются в настройках.",
+        "Everyday tools" => "На каждый день",
+        "The tools you use daily" => "Всё нужное под рукой",
+        "Start on Home. Open More to find the rest of your tools and change the tab bar." => {
+            "Начни с «Главной». В меню «Ещё» можно найти остальные инструменты и настроить вкладки."
+        }
+        "Music and sound" => "Музыка и звук",
+        "Control playback, seek through a track and adjust app volume." => {
+            "Управляй воспроизведением, перематывай треки и меняй громкость приложений."
+        }
+        "Clipboard and notes" => "Буфер и заметки",
+        "Find something you copied or jot down a reminder." => "Найди скопированное или запиши напоминание.",
+        "Your shortcuts" => "Быстрые действия",
+        "Edit the tiles on Home to keep the actions you use within reach." => {
+            "Добавь нужные действия в плитки на «Главной»."
+        }
+        "Organize your desktop" => "Панели рабочего стола",
+        "Choose what sits around the island, from favorite apps to the system tray." => {
+            "Собери панели вокруг острова из любимых приложений и системных кнопок."
+        }
+        "Bottom dock" => "Нижний док",
+        "Pin and reorder apps. Hover to preview their windows." => {
+            "Закрепляй и переставляй ярлыки. Наведи на значок для предпросмотра окна."
+        }
+        "Choose the tray, active app and system controls you want to see." => {
+            "Выбери, где показывать трей, активное приложение и системные кнопки."
+        }
+        "Screen edges" => "Края экрана",
+        "Set panels to appear on hover and hide them in fullscreen apps." => {
+            "Панели могут появляться по наведению и скрываться в полноэкранных приложениях."
+        }
+        "Notifications at a glance" => "Карточки уведомлений",
+        "Windows notifications can appear as animated cards beside the island." => {
+            "Уведомления Windows могут появляться в анимированных карточках рядом с островом."
+        }
+        "Connect Windows notifications" => "Подключение Windows",
+        "Open the Notifications tab to grant access." => "Открой «Уведомления» и разреши доступ.",
+        "Read at your pace" => "Чтение без спешки",
+        "Hover to pause the card, then open the full message." => {
+            "Наведи на карточку, чтобы задержать её, или открой полный текст."
+        }
+        "Choose where alerts appear" => "Системные баннеры",
+        "Use Windows Do not disturb to quiet system banners." => {
+            "Режим «Не беспокоить» в Windows скрывает обычные всплывающие баннеры."
+        }
+        "Talk to the Assistant" => "Команды голосом",
+        "Ask a question, control music or set a reminder. Start with a model and speech recognition." => {
+            "Задай вопрос, включи музыку или поставь напоминание. Для начала подключи модель и распознавание речи."
+        }
+        "Connect a model" => "Подключение модели",
+        "Add a model provider in Settings, under Assistant." => "В настройках Ассистента выбери сервис и добавь ключ.",
+        "Set up speech" => "Распознавание и голос",
+        "Choose how speech is recognized and how answers are spoken." => {
+            "Выбери сервис для распознавания речи и голос для ответов."
+        }
+        "Choose permissions" => "Разрешения",
+        "Decide which actions run directly and which ask first." => {
+            "Укажи, какие действия разрешены сразу, а какие требуют подтверждения."
+        }
+        "Pet and wake words" => "Питомец и голосовой запуск",
+        "Give your pet a name" => "Дай питомцу имя",
+        "Your pet can sit on the island or join you on the desktop." => {
+            "Питомец может сидеть на острове или жить отдельно на рабочем столе."
+        }
+        "Bring your pet out" => "Вынести питомца",
+        "Drag it away from the island. Drag it back to dock it again." => {
+            "Перетащи питомца с острова. Чтобы вернуть его, перетащи обратно."
+        }
+        "Talk to your pet" => "Разговор с питомцем",
+        "Use the pet’s voice action or say its wake word when listening is enabled." => {
+            "Нажми микрофон у питомца или произнеси кличку, когда голосовой запуск включён."
+        }
+        "Pick two distinct words" => "Две разные клички",
+        "Use short names that sound different. Either one can wake the Assistant." => {
+            "Выбери короткие слова, которые различаются на слух. Сработает любое из них."
+        }
+        "Skip tour" => "Пропустить",
+        "Finish tour" => "Завершить",
+        "Collapse the example" => "Свернуть пример",
+        "Open the example" => "Раскрыть пример",
+        "Open Home" => "Открыть «Главную»",
+        "Dock settings" => "Настройки дока",
+        "Top panel settings" => "Настройки верхней панели",
+        "Open Notifications" => "Открыть уведомления",
+        "Set up the Assistant" => "Настроить Ассистента",
+        "Dock the example pet" => "Вернуть питомца",
+        "Release the example pet" => "Вынести питомца",
+        "Save wake words" => "Сохранить клички",
+        "Voice activation settings" => "Настроить голосовой запуск",
+        "Now playing" => "Сейчас играет",
+        "Explorer" => "Проводник",
+        "Example notification" => "Пример уведомления",
+        "Your message appears here. Hover to keep it visible." => {
+            "Здесь появится сообщение. Наведи курсор, чтобы карточка осталась открытой."
+        }
+        "Speaking" => "Отвечаю",
+        "I’ll remind you in ten minutes." => "Напомню через десять минут.",
+        "Assistant wake words" => "Клички ассистента",
+        "Luna, Taburetka" => "Луна, Табуретка",
+        "Separate the names with a comma." => "Раздели клички запятой. Пример — «Луна, Табуретка».",
+        "Wake words saved" => "Клички сохранены.",
+        "Use different names of up to 24 characters, separated by commas." => {
+            "Укажи разные клички длиной до 24 символов через запятую."
+        }
+        "Assistant overview" => "Обзор",
+        "AI model" => "Модель",
+        "Speech recognition" => "Распознавание",
+        "Assistant permissions" => "Разрешения",
+        "Assistant replies" => "Ответы ассистента",
+        "Desktop pet" => "Питомец",
+        "Dictation" => "Диктовка",
+        "Speech service" => "Сервис распознавания",
+        "Uses the model service. Enable a separate speech service if it cannot transcribe." => {
+            "Используется сервис модели. Если он не распознаёт речь, подключи отдельный сервис."
+        }
+        "Assistant volume" => "Громкость ассистента",
+        "Voice source" => "Источник голоса",
+        "Local Piper voice" => "Локальный голос Piper",
+        "Cloud voice" => "Облачный голос",
+        "Edit assistant instructions" => "Редактировать инструкции",
+        "Review commands before confirmation" => "Проверять команды перед подтверждением",
+        "Request limits" => "Ограничения запросов",
+        "Tokens per step" => "Токенов на шаг",
+        "Command time limit in seconds" => "Лимит времени команды, сек.",
+        "Characters of command output kept" => "Символов вывода команды для модели",
+        "Assistant system controls" => "Управление системой",
+        "Read Island data" => "Читать данные Island",
+        "View screen with an image-capable model" => "Просмотр экрана через модель с изображениями",
+        "Stream Fish Audio playback" => "Потоковое воспроизведение Fish Audio",
+        "Expressive Fish Audio delivery" => "Эмоции и интонации Fish Audio",
+        "Voice commands for My Wave are disabled" => "Голосовые команды для Моей волны выключены",
+        "Starting your My Wave" => "Запускаю персональную волну.",
+        "Starting in Island" => "Запускаю в Island",
+        "No matching track in Yandex Music. Check the title or specify the artist." => {
+            "Не нашёл такой трек в Яндекс Музыке. Проверь название или уточни исполнителя."
+        }
+        "Error" => "Ошибка",
         "Yandex Music inside your island" => "Яндекс Музыка в острове",
         "Sign in in your browser. Your password stays with Yandex." => {
             "Войди через браузер. Пароль остаётся у Яндекса."
@@ -526,6 +939,7 @@ fn phrase(s: &str) -> Option<&'static str> {
         "Open delay" => "Задержка откр.",
         "Close delay" => "Задержка закр.",
         "Open speed" => "Скорость откр.",
+        "Animate island opening and closing" => "Анимация открытия и закрытия острова",
         "Close speed" => "Скорость закр.",
         "Auto-hide" => "Автоскрытие",
         "Lock dragging" => "Заблокировать перетаскивание",
@@ -699,6 +1113,7 @@ fn phrase(s: &str) -> Option<&'static str> {
             "Модель или адрес сервера в настройках недопустимы"
         }
         "No connection to the service" => "Нет связи с сервисом",
+        "No connection to the service or the request timed out" => "Нет связи с сервисом или время ожидания истекло",
         "Thinking…" => "Думаю…",
         "AI is not set up" => "Нейросеть не настроена",
         "Open Settings, AI: add a key" => "Откройте Настройки, Нейросети: добавьте ключ",
@@ -801,6 +1216,8 @@ fn phrase(s: &str) -> Option<&'static str> {
         "General" => "Основные",
         "Island" => "Остров",
         "Appearance" => "Внешний вид",
+        "Interface" => "Интерфейс",
+        "Classic interface icons" => "Классические иконки интерфейса",
         "About" => "О программе",
         "Logs folder" => "Папка логов",
         "Search settings" => "Поиск по настройкам",
@@ -1260,6 +1677,12 @@ fn phrase(s: &str) -> Option<&'static str> {
         }
         "Save a key for the speech service first" => "Сначала сохраните ключ сервиса речи",
         "Separate speech service" => "Отдельный сервис речи",
+        "Speech endpoint unavailable; check the separate speech service" => {
+            "Речь недоступна: проверьте отдельный сервис речи в настройках ИИ"
+        }
+        "A chat service may not support speech. If needed, enable a separate speech service below." => {
+            "Сервис чата может не поддерживать речь. В этом случае включите отдельный сервис речи ниже."
+        }
         "Voice command name" => "Имя для голосовых команд",
         "Save command name" => "Сохранить имя",
         "Command name saved" => "Имя сохранено",

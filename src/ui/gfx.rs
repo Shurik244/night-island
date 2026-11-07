@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use windows::Foundation::Size;
 use windows::Graphics::DirectX::{DirectXAlphaMode, DirectXPixelFormat};
 use windows::Graphics::SizeInt32;
@@ -85,6 +88,7 @@ pub struct Gpu {
     factory: ID2D1Factory,
     dwrite: IDWriteFactory,
     icons: PCWSTR,
+    vector_icons: Rc<RefCell<super::icons::Cache>>,
     weather: std::cell::RefCell<crate::ui::weather_icons::WeatherIcons>,
 }
 
@@ -99,6 +103,7 @@ impl Gpu {
             factory: self.factory.clone(),
             dwrite: self.dwrite.clone(),
             icons: self.icons,
+            vector_icons: Rc::clone(&self.vector_icons),
             weather: std::cell::RefCell::default(),
         }
     }
@@ -123,7 +128,7 @@ impl Gpu {
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let icons = pick_icon_font(&dwrite);
             let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-            Ok(Self { gfx, factory, dwrite, icons, weather: std::cell::RefCell::default() })
+            Ok(Self { gfx, factory, dwrite, icons, vector_icons: Rc::default(), weather: RefCell::default() })
         }
     }
 
@@ -161,6 +166,10 @@ impl Gpu {
         size: (i32, i32),
         f: impl FnOnce(&Painter),
     ) -> Result<()> {
+        self.paint_dc_target(&self.create_dc_target()?, hdc, size, f)
+    }
+
+    pub(super) fn create_dc_target(&self) -> Result<windows::Win32::Graphics::Direct2D::ID2D1DCRenderTarget> {
         use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT};
         use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
         unsafe {
@@ -175,15 +184,36 @@ impl Gpu {
                 usage: D2D1_RENDER_TARGET_USAGE_NONE,
                 minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
             };
-            let dc_target = self.factory.CreateDCRenderTarget(&props)?;
+            self.factory.CreateDCRenderTarget(&props)
+        }
+    }
+
+    pub(super) fn paint_dc_target(
+        &self,
+        dc_target: &windows::Win32::Graphics::Direct2D::ID2D1DCRenderTarget,
+        hdc: windows::Win32::Graphics::Gdi::HDC,
+        size: (i32, i32),
+        f: impl FnOnce(&Painter),
+    ) -> Result<()> {
+        unsafe {
             let rect = windows::Win32::Foundation::RECT { left: 0, top: 0, right: size.0, bottom: size.1 };
             dc_target.BindDC(hdc, &rect)?;
+            let target: ID2D1RenderTarget = dc_target.cast()?;
             dc_target.BeginDraw();
             dc_target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             dc_target.Clear(Some(&rgba(0.0, 0.0, 0.0, 0.0)));
-            let target: ID2D1RenderTarget = dc_target.cast()?;
-            f(&Painter { dc: &target, dwrite: self.dwrite(), icons: self.icons(), weather: &self.weather });
+            f(&self.painter(&target));
             dc_target.EndDraw(None, None)
+        }
+    }
+
+    fn painter<'a>(&'a self, dc: &'a ID2D1RenderTarget) -> Painter<'a> {
+        Painter {
+            dc,
+            dwrite: self.dwrite(),
+            icons: self.icons(),
+            vector_icons: &self.vector_icons,
+            weather: &self.weather,
         }
     }
 }
@@ -216,7 +246,7 @@ impl Layer {
             dc.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             dc.Clear(Some(&rgba(0.0, 0.0, 0.0, 0.0)));
             let target: ID2D1RenderTarget = dc.cast()?;
-            f(&Painter { dc: &target, dwrite: gpu.dwrite(), icons: gpu.icons(), weather: &gpu.weather });
+            f(&gpu.painter(&target));
             interop.EndDraw()
         }
     }
@@ -250,9 +280,7 @@ impl Layer {
             dc.PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
             dc.Clear(Some(&rgba(0.0, 0.0, 0.0, 0.0)));
             let target = dc.cast::<ID2D1RenderTarget>();
-            let painted = target.and_then(|target| {
-                f(&Painter { dc: &target, dwrite: gpu.dwrite(), icons: gpu.icons(), weather: &gpu.weather })
-            });
+            let painted = target.and_then(|target| f(&gpu.painter(&target)));
             dc.PopAxisAlignedClip();
             let ended = interop.EndDraw();
             painted.and(ended)
@@ -288,6 +316,7 @@ pub struct Painter<'a> {
     dc: &'a ID2D1RenderTarget,
     dwrite: &'a IDWriteFactory,
     icons: PCWSTR,
+    vector_icons: &'a RefCell<super::icons::Cache>,
     weather: &'a std::cell::RefCell<crate::ui::weather_icons::WeatherIcons>,
 }
 
@@ -320,15 +349,7 @@ impl Painter<'_> {
         use windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_METRICS;
         let text = crate::ui::i18n::tr(text);
         unsafe {
-            let format = self.dwrite.CreateTextFormat(
-                w!("Segoe UI"),
-                None,
-                weight,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                size,
-                w!("en-us"),
-            )?;
+            let format = crate::ui::fonts::format(self.dwrite, size, weight)?;
             format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
             let wide: Vec<u16> = text.encode_utf16().collect();
             let layout =
@@ -349,15 +370,7 @@ impl Painter<'_> {
         color: D2D1_COLOR_F,
     ) -> Result<()> {
         unsafe {
-            let format = self.dwrite.CreateTextFormat(
-                w!("Segoe UI"),
-                None,
-                weight,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                size,
-                w!("en-us"),
-            )?;
+            let format = crate::ui::fonts::format(self.dwrite, size, weight)?;
             format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
             let sign = self.dwrite.CreateEllipsisTrimmingSign(&format)?;
             format.SetTrimming(
@@ -388,15 +401,7 @@ impl Painter<'_> {
     ) -> Result<f32> {
         use windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_METRICS;
         unsafe {
-            let format = self.dwrite.CreateTextFormat(
-                w!("Segoe UI"),
-                None,
-                DWRITE_FONT_WEIGHT_NORMAL,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                size,
-                w!("en-us"),
-            )?;
+            let format = crate::ui::fonts::format(self.dwrite, size, DWRITE_FONT_WEIGHT_NORMAL)?;
             format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
             let wide: Vec<u16> = text.encode_utf16().collect();
             let layout = self.dwrite.CreateTextLayout(&wide, &format, (rect.2 - rect.0).max(1.0), 100_000.0)?;
@@ -547,7 +552,12 @@ impl Painter<'_> {
     }
 
     pub fn glyph(&self, ch: char, rect: (f32, f32, f32, f32), size: f32, color: D2D1_COLOR_F) -> Result<()> {
-        if let Some((view_box, path)) = crate::ui::icons::lookup(ch) {
+        if !super::icons::legacy() && self.vector_icons.borrow_mut().draw(self.dc, ch, rect, size, color)? {
+            return Ok(());
+        }
+        if let Some((view_box, path)) = super::icons::lookup(ch)
+            && self.dc.cast::<windows::Win32::Graphics::Direct2D::ID2D1DeviceContext5>().is_ok()
+        {
             return self.icon(view_box, path, rect, size, color);
         }
         let mut buf = [0u8; 4];
@@ -599,7 +609,13 @@ impl Painter<'_> {
             rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             rt.Clear(Some(&rgba(0.0, 0.0, 0.0, 0.0)));
             rt.SetTransform(&Matrix3x2::translation(-origin.0, -origin.1));
-            let painted = f(&Painter { dc: &rt, dwrite: self.dwrite, icons: self.icons, weather: self.weather });
+            let painted = f(&Painter {
+                dc: &rt,
+                dwrite: self.dwrite,
+                icons: self.icons,
+                vector_icons: self.vector_icons,
+                weather: self.weather,
+            });
             rt.EndDraw(None, None)?;
             painted?;
             target.GetBitmap()
@@ -686,7 +702,7 @@ impl Painter<'_> {
         Ok(())
     }
 
-    pub fn fill_ear(&self, size: f32, left: bool, color: D2D1_COLOR_F) -> Result<()> {
+    fn ear_geometry(&self, size: f32, left: bool) -> Result<ID2D1PathGeometry> {
         unsafe {
             let factory: ID2D1Factory = self.dc.GetFactory()?;
             let geometry = factory.CreatePathGeometry()?;
@@ -701,9 +717,37 @@ impl Painter<'_> {
             sink.AddBezier(&D2D1_BEZIER_SEGMENT { point1: pt(r, r - k), point2: pt(k, 0.0), point3: pt(0.0, 0.0) });
             sink.EndFigure(D2D1_FIGURE_END_CLOSED);
             sink.Close()?;
+            Ok(geometry)
+        }
+    }
+
+    pub fn fill_ear(&self, size: f32, left: bool, color: D2D1_COLOR_F) -> Result<()> {
+        unsafe {
             let brush = self.dc.CreateSolidColorBrush(&color, None)?;
+            self.dc.FillGeometry(&self.ear_geometry(size, left)?, &brush, None);
+        }
+        Ok(())
+    }
+
+    pub fn fill_ear_progress(
+        &self,
+        size: f32,
+        left: bool,
+        range: (f32, f32),
+        fraction: f32,
+        base: (u8, u8, u8),
+    ) -> Result<()> {
+        let end = range.0 + (range.1 - range.0) * fraction.clamp(0.0, 1.0);
+        if end <= 0.0 {
+            return Ok(());
+        }
+        let brush = self.progress_brush((range.0, 0.0, range.1, size), base, false)?;
+        let geometry = self.ear_geometry(size, left)?;
+        self.push_clip((0.0, 0.0, end.min(size), size));
+        unsafe {
             self.dc.FillGeometry(&geometry, &brush, None);
         }
+        self.pop_clip();
         Ok(())
     }
 
@@ -1169,6 +1213,80 @@ impl Painter<'_> {
     }
 
     pub fn fill_capsule_progress(&self, rect: (f32, f32, f32, f32), fraction: f32, base: (u8, u8, u8)) -> Result<()> {
+        self.fill_body_progress(rect, rect, (rect.3 - rect.1).min(rect.2 - rect.0) / 2.0, fraction, base)
+    }
+
+    fn progress_brush(
+        &self,
+        range: (f32, f32, f32, f32),
+        base: (u8, u8, u8),
+        vertical: bool,
+    ) -> Result<windows::Win32::Graphics::Direct2D::ID2D1LinearGradientBrush> {
+        use windows::Win32::Graphics::Direct2D::Common::D2D1_GRADIENT_STOP;
+        use windows::Win32::Graphics::Direct2D::{
+            D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
+        };
+        let stops: [D2D1_GRADIENT_STOP; 5] = std::array::from_fn(|i| {
+            let position = i as f32 / 4.0;
+            let (r, g, b) = crate::platform::media::gradient(base, position);
+            D2D1_GRADIENT_STOP { position, color: rgba(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 0.24) }
+        });
+        unsafe {
+            let collection = self.dc.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+            self.dc.CreateLinearGradientBrush(
+                &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                    startPoint: windows_numerics::Vector2 { X: range.0, Y: range.1 },
+                    endPoint: windows_numerics::Vector2 {
+                        X: if vertical { range.0 } else { range.2 },
+                        Y: if vertical { range.3 } else { range.1 },
+                    },
+                },
+                None,
+                &collection,
+            )
+        }
+    }
+
+    pub fn fill_progress_surface(
+        &self,
+        range: (f32, f32, f32, f32),
+        size: (f32, f32),
+        fraction: f32,
+        base: (u8, u8, u8),
+        vertical: bool,
+        reverse: bool,
+    ) -> Result<()> {
+        if fraction <= 0.0 {
+            return Ok(());
+        }
+        let range = if vertical && reverse { (range.0, range.3, range.2, range.1) } else { range };
+        let brush = self.progress_brush(range, base, vertical)?;
+        let extent = if fraction >= 1.0 {
+            if vertical { if reverse { 0.0 } else { size.1 } } else { size.0 }
+        } else if vertical {
+            range.1 + (range.3 - range.1) * fraction.min(1.0)
+        } else {
+            range.0 + (range.2 - range.0) * fraction.min(1.0)
+        };
+        let rect = if vertical {
+            if reverse { (0.0, extent, size.0, size.1) } else { (0.0, 0.0, size.0, extent) }
+        } else {
+            (0.0, 0.0, extent, size.1)
+        };
+        unsafe {
+            self.dc.FillRectangle(&D2D_RECT_F { left: rect.0, top: rect.1, right: rect.2, bottom: rect.3 }, &brush);
+        }
+        Ok(())
+    }
+
+    pub fn fill_body_progress(
+        &self,
+        rect: (f32, f32, f32, f32),
+        body: (f32, f32, f32, f32),
+        radius: f32,
+        fraction: f32,
+        base: (u8, u8, u8),
+    ) -> Result<()> {
         use windows::Win32::Graphics::Direct2D::Common::D2D1_GRADIENT_STOP;
         use windows::Win32::Graphics::Direct2D::{
             D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
@@ -1196,8 +1314,8 @@ impl Painter<'_> {
                 None,
                 &collection,
             )?;
-            self.push_clip((left, top, left + (right - left) * fraction, bottom));
-            self.dc.FillRoundedRectangle(&rounded(rect, (bottom - top).min(right - left) / 2.0), &brush);
+            self.push_clip((left, body.1, left + (right - left) * fraction, body.3));
+            self.dc.FillRoundedRectangle(&rounded(body, radius), &brush);
             self.pop_clip();
         }
         Ok(())
@@ -1397,15 +1515,19 @@ impl Painter<'_> {
         color: D2D1_COLOR_F,
     ) -> Result<()> {
         unsafe {
-            let format = self.dwrite.CreateTextFormat(
-                family,
-                None,
-                weight,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                size,
-                w!("en-us"),
-            )?;
+            let format = if family == self.icons {
+                self.dwrite.CreateTextFormat(
+                    family,
+                    None,
+                    weight,
+                    DWRITE_FONT_STYLE_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    size,
+                    w!("en-us"),
+                )?
+            } else {
+                super::fonts::format(self.dwrite, size, weight)?
+            };
             format.SetTextAlignment(align)?;
             format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
             format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
@@ -1459,15 +1581,7 @@ fn pick_icon_font(dwrite: &IDWriteFactory) -> PCWSTR {
 
 pub fn make_layout(dwrite: &IDWriteFactory, text: &str, width: f32, size: f32) -> Result<IDWriteTextLayout> {
     unsafe {
-        let format = dwrite.CreateTextFormat(
-            w!("Segoe UI"),
-            None,
-            DWRITE_FONT_WEIGHT_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            size,
-            w!("en-us"),
-        )?;
+        let format = crate::ui::fonts::format(dwrite, size, DWRITE_FONT_WEIGHT_NORMAL)?;
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
         let wide: Vec<u16> = text.encode_utf16().collect();
         dwrite.CreateTextLayout(&wide, &format, width.max(1.0), 1_000_000.0)

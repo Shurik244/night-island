@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::sync::Once;
@@ -18,7 +18,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Result, w};
 
-use crate::data::top_panel::TopPanelSettings;
+use crate::data::top_panel::{PanelEntrance, TopPanelSettings};
+
+#[path = "panel_motion.rs"]
+mod motion;
+#[path = "panel_reveal.rs"]
+mod panel_reveal;
 use crate::platform::{apps, desktop_dock as desktop, system::Radios};
 use crate::ui::{
     gfx::{Gpu, Painter, rgba},
@@ -110,6 +115,26 @@ struct Button {
     enabled: bool,
 }
 
+#[derive(Clone)]
+pub(crate) struct IslandMotion {
+    pub progress: crate::ui::reveal::Reveal,
+    pub closed: Rect,
+    pub opened: Rect,
+}
+
+impl IslandMotion {
+    fn bounds(&self, now: Instant) -> Rect {
+        let p = self.progress.value(now);
+        let mix = |a: f32, b: f32| a + (b - a) * p;
+        (
+            mix(self.closed.0, self.opened.0),
+            mix(self.closed.1, self.opened.1),
+            mix(self.closed.2, self.opened.2),
+            mix(self.closed.3, self.opened.3),
+        )
+    }
+}
+
 struct State {
     hwnd: HWND,
     parent: HWND,
@@ -128,8 +153,18 @@ struct State {
     pressed: Option<Hit>,
     requests: VecDeque<Request>,
     visible: bool,
-    fade: Instant,
     opening: bool,
+    frame_timer: Cell<bool>,
+    reveal: RefCell<Option<panel_reveal::Reveal>>,
+    revealing: Cell<bool>,
+    travel: motion::Travel,
+    relocation: motion::Travel,
+    displacement: (f32, f32),
+    destination: (i32, i32),
+    departure: (i32, i32),
+    boundary: Option<(f32, bool)>,
+    island_motion: Option<IslandMotion>,
+    motion_changed: bool,
     alpha: u8,
     ghost_alpha: u8,
     click_through: bool,
@@ -173,6 +208,18 @@ fn overlaps(a: Rect, b: Rect) -> bool {
 }
 fn scaled(r: Rect, s: f32) -> Rect {
     (r.0 * s, r.1 * s, r.2 * s, r.3 * s)
+}
+
+fn across_gap(island: Rect, panel: Rect, point: (f32, f32), padding: f32) -> bool {
+    let top = panel.1.min(island.1) - padding;
+    let bottom = panel.3.max(island.3) + padding;
+    if panel.0 >= island.2 {
+        inside((island.2 - padding, top, panel.0 + padding, bottom), point)
+    } else if panel.2 <= island.0 {
+        inside((panel.2 - padding, top, island.0 + padding, bottom), point)
+    } else {
+        false
+    }
 }
 
 fn app_name(snapshot: &Snapshot) -> String {
@@ -220,7 +267,123 @@ fn left_blocks(settings: &TopPanelSettings) -> Vec<Block> {
     .collect()
 }
 
+fn liquid_panel(
+    p: &Painter,
+    bounds: Rect,
+    bend: f32,
+    focus: f32,
+    color: windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F,
+) -> Result<()> {
+    let (l, t, r, b) = bounds;
+    let radius = (b - t) / 2.0;
+    let mid = (t + b) / 2.0;
+    let x = (l + (r - l) * focus).clamp(l + radius, r - radius);
+    let k = radius * 0.5523;
+    p.fill_curves(
+        (l + radius, t),
+        &[
+            [(x, t - bend), (x, t - bend), (r - radius, t)],
+            [(r - radius + k, t), (r + bend * 0.3, mid - k), (r + bend * 0.3, mid)],
+            [(r + bend * 0.3, mid + k), (r - radius + k, b), (r - radius, b)],
+            [(x, b + bend), (x, b + bend), (l + radius, b)],
+            [(l + radius - k, b), (l - bend * 0.3, mid + k), (l - bend * 0.3, mid)],
+            [(l - bend * 0.3, mid - k), (l + radius - k, t), (l + radius, t)],
+        ],
+        color,
+    )
+}
+
 impl State {
+    fn start_frames(&self) {
+        if !self.frame_timer.get() {
+            self.frame_timer.set(unsafe { SetTimer(Some(self.hwnd), FRAME, 16, None) } != 0);
+        }
+    }
+
+    fn stop_frames(&self) {
+        if self.frame_timer.replace(false) {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), FRAME);
+            }
+        }
+    }
+
+    fn position_at(&self, now: Instant) -> (f32, f32) {
+        let progress = self.travel.value(now);
+        if let Some(motion) = &self.island_motion
+            && let Some((_, left)) = self.boundary
+        {
+            let bounds = motion.bounds(now);
+            let width = self.size.0 as f32;
+            let gap = self.settings.island_gap as f32 * self.scale;
+            let x =
+                if left { bounds.0 - (width + gap) * progress } else { bounds.2 - width + (width + gap) * progress };
+            return (x, bounds.1 - 10.0 * self.scale);
+        }
+        let remaining = 1.0 - self.relocation.value(now);
+        let coordinate = |from: i32, to: i32, displacement: f32| {
+            from as f32 + (to - from) as f32 * progress + displacement * remaining
+        };
+        (
+            coordinate(self.departure.0, self.destination.0, self.displacement.0),
+            coordinate(self.departure.1, self.destination.1, self.displacement.1),
+        )
+    }
+
+    fn boundary_at(&self, now: Instant) -> Option<(f32, bool)> {
+        self.boundary.map(|(edge, left)| {
+            (
+                self.island_motion.as_ref().map_or(edge, |motion| {
+                    let rect = motion.bounds(now);
+                    if left { rect.0 } else { rect.2 }
+                }),
+                left,
+            )
+        })
+    }
+
+    fn remaining(&self, now: Instant) -> std::time::Duration {
+        self.travel
+            .remaining(now)
+            .max(self.relocation.remaining(now))
+            .max(self.island_motion.as_ref().map_or(std::time::Duration::ZERO, |m| m.progress.remaining(now)))
+    }
+
+    fn animate_reveal(&self) {
+        let mut visual = self.reveal.borrow_mut();
+        let started = self.boundary.is_some_and(|(edge, left)| {
+            if visual.is_none() {
+                *visual = panel_reveal::Reveal::new(&self.gpu).ok();
+            }
+            visual.as_mut().is_some_and(|visual| visual.animate(self, edge, left).is_ok())
+        });
+        if !started {
+            visual.take();
+        }
+        drop(visual);
+        if started {
+            self.revealing.set(true);
+            unsafe {
+                let _ = ShowWindow(self.hwnd, SW_HIDE);
+            }
+        } else if self.revealing.replace(false) {
+            unsafe {
+                let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+            }
+        }
+    }
+
+    fn motion_frame(&mut self) {
+        let now = Instant::now();
+        let progress = self.travel.value(now);
+        if !matches!(self.role, Role::Card(_)) {
+            let (x, y) = self.position_at(now);
+            self.origin = (x.round() as i32, y.round() as i32);
+        }
+        self.alpha = (progress * 255.0).round() as u8;
+        self.opening = !self.remaining(now).is_zero();
+    }
+
     fn fit_tray(&mut self, available: f32) {
         self.tray_budget = available;
         let slots = (available.max(0.0) / 30.0).floor() as usize;
@@ -271,7 +434,11 @@ impl State {
         };
         self.tray_width = self.tray_from + (self.tray_target() - self.tray_from) * (1.0 - (1.0 - t).powi(3));
         let width = (self.dimensions().0 * self.scale).ceil() as i32;
-        self.origin.0 += self.size.0 - width;
+        if self.settings.entrance != PanelEntrance::Island {
+            self.origin.0 += self.size.0 - width;
+            self.destination.0 += self.size.0 - width;
+        }
+        self.departure.0 += self.size.0 - width;
         self.size.0 = width;
         self.layout();
         unsafe {
@@ -354,7 +521,9 @@ impl State {
                 }
             }
             Role::Right => {
-                let mut x = 14.0;
+                let trailing = self.settings.entrance == PanelEntrance::Island;
+                let base_width: f32 = blocks(&self.settings).into_iter().map(block_width).sum();
+                let mut x = 14.0 + if trailing { base_width } else { 0.0 };
                 if self.tray_open && self.tray_width >= tray_target - 1.0 {
                     for index in (self.tray_page..self.tray_icons.len()).take(self.tray_capacity) {
                         add((x, 12.0, x + 30.0, 42.0), Hit::TrayIcon(index), true);
@@ -364,7 +533,7 @@ impl State {
                         add((x, 12.0, x + 30.0, 42.0), Hit::TrayPage, true);
                     }
                 }
-                x = 14.0 + self.tray_width;
+                x = 14.0 + if trailing { 0.0 } else { self.tray_width };
                 for block in blocks(&self.settings) {
                     let next = x + block_width(block);
                     add((x, 12.0, next, 42.0), Hit::Block(block), true);
@@ -433,8 +602,28 @@ impl State {
             _ => {
                 let (r, g, b) = crate::ui::theme::panel();
                 let panel = scaled((10.0, 10.0, w - 10.0, h - 10.0), s);
-                p.fill_round_rect(panel, 17.0 * s, rgba(r, g, b, 0.98))?;
-                p.stroke_round_rect(panel, 17.0 * s, s, rgba(1.0, 1.0, 1.0, 0.09))?;
+                if self.settings.liquid && self.settings.animations && crate::ui::feedback::motion_allowed() {
+                    let hover = self.feedback.sample(u64::MAX, if self.hover.is_some() { 1.0 } else { 0.0 }, 0.0, 220);
+                    let focus = self
+                        .buttons
+                        .iter()
+                        .find(|button| Some(button.hit) == self.hover)
+                        .map_or(0.5, |button| (button.rect.0 + button.rect.2) / (2.0 * w));
+                    let focus = self.feedback.sample(u64::MAX - 1, focus, 0.5, 200);
+                    let progress = self.travel.value(Instant::now());
+                    let bend = (hover * 2.0 + (progress * std::f32::consts::PI).sin() * 3.0) * s;
+                    liquid_panel(p, panel, bend, focus, rgba(1.0, 1.0, 1.0, 0.12))?;
+                    liquid_panel(
+                        p,
+                        (panel.0 + s, panel.1 + s, panel.2 - s, panel.3 - s),
+                        bend,
+                        focus,
+                        rgba(r, g, b, 1.0),
+                    )?;
+                } else {
+                    p.fill_round_rect(panel, 17.0 * s, rgba(r, g, b, 0.98))?;
+                    p.stroke_round_rect(panel, 17.0 * s, s, rgba(1.0, 1.0, 1.0, 0.09))?;
+                }
             }
         }
         for button in &self.buttons {
@@ -503,10 +692,13 @@ impl State {
                 let icon_width = (self.tray_icons.len().saturating_sub(self.tray_page).min(self.tray_capacity) as f32
                     + if self.tray_icons.len() > self.tray_capacity { 1.0 } else { 0.0 })
                     * 30.0;
-                p.push_clip(scaled((14.0, 14.0, 14.0 + self.tray_width, 40.0), s));
+                let trailing = self.settings.entrance == PanelEntrance::Island;
+                let tray_x = 14.0
+                    + if trailing { blocks(&self.settings).into_iter().map(block_width).sum::<f32>() } else { 0.0 };
+                p.push_clip(scaled((tray_x, 14.0, tray_x + self.tray_width, 40.0), s));
                 for (offset, entry) in self.tray_icons.iter().skip(self.tray_page).take(self.tray_capacity).enumerate()
                 {
-                    let x = 14.0 + self.tray_width - icon_width + offset as f32 * 30.0;
+                    let x = tray_x + if trailing { 0.0 } else { self.tray_width - icon_width } + offset as f32 * 30.0;
                     if let Some(icon) = &entry.icon {
                         p.image(scaled((x + 6.0, 18.0, x + 24.0, 36.0), s), 0.0, icon.side, &icon.bgra)?;
                     } else {
@@ -560,7 +752,9 @@ impl State {
                     let (icon, value, active) = match block {
                         Block::Wifi => ('\u{E701}', String::new(), self.snapshot.radios.wifi == Some(true)),
                         Block::Bluetooth => ('\u{E702}', String::new(), self.snapshot.radios.bluetooth == Some(true)),
-                        Block::Tray => (if self.tray_open { '\u{E76C}' } else { '\u{E76B}' }, String::new(), true),
+                        Block::Tray => {
+                            (if self.tray_open != trailing { '\u{E76C}' } else { '\u{E76B}' }, String::new(), true)
+                        }
                         Block::Workspaces => ('\u{E7F4}', String::new(), true),
                         Block::Volume => (
                             if self.snapshot.muted { '\u{E74F}' } else { '\u{E767}' },
@@ -763,6 +957,15 @@ impl State {
     }
 
     fn render(&self) {
+        if !self.visible {
+            return;
+        }
+        if self.revealing.get() && self.opening && self.boundary.is_some() {
+            if let Some(visual) = &*self.reveal.borrow() {
+                visual.opacity(self.ghost_alpha);
+            }
+            return;
+        }
         let mut surface = self.surface.borrow_mut();
         if surface.as_ref().is_none_or(|surface| !surface.fits(self.size)) {
             let capacity = if matches!(self.role, Role::Right) {
@@ -773,7 +976,23 @@ impl State {
             *surface = PopupSurface::new((capacity.max(self.size.0), self.size.1)).ok();
         }
         if let Some(surface) = &*surface
-            && surface.paint_size(&self.gpu, self.size, |p| self.draw(p)).is_ok()
+            && surface
+                .paint_size(&self.gpu, self.size, |p| {
+                    if let Some((edge, left)) = self.boundary_at(Instant::now()) {
+                        let edge = edge - self.origin.0 as f32;
+                        p.push_clip(if left {
+                            (0.0, 0.0, edge.max(0.0), self.size.1 as f32)
+                        } else {
+                            (edge.max(0.0), 0.0, self.size.0 as f32, self.size.1 as f32)
+                        });
+                    }
+                    let result = self.draw(p);
+                    if self.boundary.is_some() {
+                        p.pop_clip();
+                    }
+                    result
+                })
+                .is_ok()
         {
             let _ = surface.present_size(
                 self.hwnd,
@@ -782,10 +1001,14 @@ impl State {
                 (u16::from(self.alpha) * u16::from(self.ghost_alpha) / 255) as u8,
             );
         }
-        if self.feedback.active() {
+        if self.revealing.replace(false) {
             unsafe {
-                SetTimer(Some(self.hwnd), FRAME, 16, None);
+                let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
             }
+            self.reveal.borrow_mut().take();
+        }
+        if self.feedback.active() {
+            self.start_frames();
         }
     }
 
@@ -795,14 +1018,20 @@ impl State {
         }
         self.hover = None;
         self.visible = false;
+        self.revealing.set(false);
+        self.reveal.borrow_mut().take();
+        self.opening = false;
+        self.island_motion = None;
+        self.relocation.show(true, 0, Instant::now());
+        self.travel.show(false, 0, Instant::now());
         self.pressed = None;
+        self.stop_frames();
         if matches!(self.role, Role::Right) {
             self.tray_open = false;
             self.tray_requested = false;
             self.tray_width = 0.0;
         }
         unsafe {
-            let _ = KillTimer(Some(self.hwnd), FRAME);
             let _ = KillTimer(Some(self.hwnd), DISMISS);
             let _ = KillTimer(Some(self.hwnd), TRAY_ANIMATION);
             let _ = PostMessageW(Some(self.hwnd), WM_APP + 93, WPARAM(0), LPARAM(0));
@@ -908,7 +1137,10 @@ extern "system" fn proc(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESU
             }
             WM_NCHITTEST => {
                 let state = &*ptr;
-                if state.click_through {
+                let screen_x = l.0 as i16 as f32;
+                let clipped =
+                    state.boundary.is_some_and(|(edge, left)| if left { screen_x >= edge } else { screen_x < edge });
+                if state.click_through || state.alpha == 0 || clipped {
                     return LRESULT(HTTRANSPARENT as isize);
                 }
                 let point = (
@@ -1043,14 +1275,14 @@ extern "system" fn proc(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESU
                 if w.0 == TRAY_ANIMATION {
                     state.tray_frame();
                 } else if w.0 == FRAME {
-                    let t = (state.fade.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0);
-                    state.alpha = ((1.0 - (1.0 - t).powi(3)) * 255.0).round() as u8;
+                    state.motion_frame();
+                    if !state.travel.shown() && state.alpha == 0 {
+                        state.hide();
+                        return LRESULT(0);
+                    }
                     state.render();
-                    if t >= 1.0 {
-                        state.opening = false;
-                        if !state.feedback.active() {
-                            let _ = KillTimer(Some(hwnd), FRAME);
-                        }
+                    if !state.opening && !state.feedback.active() {
+                        state.stop_frames();
                     }
                 } else if w.0 == DISMISS {
                     let mut point = POINT::default();
@@ -1128,8 +1360,18 @@ impl Wing {
             pressed: None,
             requests: VecDeque::new(),
             visible: false,
-            fade: Instant::now(),
             opening: false,
+            travel: Default::default(),
+            relocation: Default::default(),
+            displacement: (0.0, 0.0),
+            frame_timer: Cell::new(false),
+            reveal: RefCell::new(None),
+            revealing: Cell::new(false),
+            destination: (0, 0),
+            departure: (0, 0),
+            boundary: None,
+            island_motion: None,
+            motion_changed: false,
             alpha: 255,
             ghost_alpha: 255,
             click_through: false,
@@ -1152,38 +1394,69 @@ impl Wing {
     }
 
     fn place(&mut self, origin: (i32, i32), scale: f32, visible: bool) {
+        let now = Instant::now();
+        let animated = self.state.settings.animations && crate::ui::feedback::motion_allowed();
+        let ms = if animated { self.state.settings.motion_ms } else { 0 };
         if !visible {
             if self.state.visible {
-                self.state.hide();
+                let changed = self.state.travel.shown();
+                self.state.travel.show(false, ms, now);
+                if self.state.travel.active(now) {
+                    if changed {
+                        self.state.motion_frame();
+                        self.state.animate_reveal();
+                    }
+                    self.state.start_frames();
+                } else {
+                    self.state.hide();
+                }
             }
             return;
         }
         let fresh = !self.state.visible;
+        let old_origin = self.state.origin;
         let (w, h) = self.state.dimensions();
         let size = ((w * scale).ceil() as i32, (h * scale).ceil() as i32);
-        let moved = size != self.state.size || origin != self.state.origin;
+        let moved = size != self.state.size || origin != self.state.destination;
         self.state.scale = scale;
         self.state.size = size;
-        self.state.origin = origin;
+        self.state.destination = origin;
+        if matches!(self.state.role, Role::Card(_)) {
+            self.state.origin = origin;
+            self.state.departure = origin;
+        }
+        let reversed = !self.state.travel.shown();
+        self.state.travel.show(true, ms, now);
+        if fresh || (moved && !matches!(self.state.role, Role::Card(_))) {
+            self.state.displacement = (0.0, 0.0);
+            self.state.relocation.show(true, 0, now);
+            self.state.motion_frame();
+            if !fresh && ms > 0 && self.state.island_motion.is_none() {
+                self.state.displacement =
+                    ((old_origin.0 - self.state.origin.0) as f32, (old_origin.1 - self.state.origin.1) as f32);
+                self.state.relocation.show(false, 0, now);
+                self.state.relocation.show(true, ms.min(280), now);
+            }
+        }
+        self.state.motion_frame();
         self.state.visible = true;
         self.state.layout();
+        if self.state.opening && (fresh || moved || reversed || self.state.motion_changed) {
+            self.state.animate_reveal();
+        }
+        self.state.motion_changed = false;
         unsafe {
-            if fresh {
-                self.state.fade = Instant::now();
-                self.state.opening = self.state.settings.animations && crate::ui::feedback::motion_allowed();
-                self.state.alpha = if self.state.opening { 0 } else { 255 };
-                if self.state.opening {
-                    SetTimer(Some(self.state.hwnd), FRAME, 16, None);
-                }
-                if matches!(self.state.role, Role::Card(_)) {
-                    SetTimer(Some(self.state.hwnd), DISMISS, 50, None);
-                }
+            if fresh && matches!(self.state.role, Role::Card(_)) {
+                SetTimer(Some(self.state.hwnd), DISMISS, 50, None);
             }
-            if fresh || moved || self.state.dirty {
+            if self.state.opening {
+                self.state.start_frames();
+            }
+            if fresh || moved || old_origin != self.state.origin || self.state.dirty {
                 self.state.render();
                 self.state.dirty = false;
             }
-            if fresh {
+            if fresh && !self.state.revealing.get() {
                 let _ = ShowWindow(self.state.hwnd, SW_SHOWNOACTIVATE);
             }
         }
@@ -1204,6 +1477,61 @@ impl Drop for Wing {
 }
 
 impl TopPanel {
+    pub(crate) fn sync_island_motion(&mut self, motion: Option<IslandMotion>) {
+        let linked = self.settings.entrance == PanelEntrance::Island
+            && self.settings.animations
+            && crate::ui::feedback::motion_allowed();
+        for wing in [&mut self.left, &mut self.right] {
+            let next = motion.clone().filter(|_| linked);
+            wing.state.motion_changed |= wing.state.island_motion.as_ref().map(|m| m.progress.started())
+                != next.as_ref().map(|m| m.progress.started());
+            wing.state.island_motion = next;
+        }
+    }
+    pub fn animating(&self) -> bool {
+        let now = Instant::now();
+        [&self.left, &self.right, &self.card]
+            .iter()
+            .any(|wing| wing.state.visible && !wing.state.remaining(now).is_zero())
+            || (self.right.state.tray_width - self.right.state.tray_target()).abs() > 0.1
+    }
+
+    pub fn interacting_at(&self, island: Rect, point: (f32, f32)) -> bool {
+        if !self.shown {
+            return false;
+        }
+        let wings = [&self.left, &self.right, &self.card];
+        let interactive = |state: &State| state.visible && state.travel.shown() && !state.click_through;
+        if wings.iter().any(|wing| interactive(&wing.state)) && crate::platform::system_tray::is_open() {
+            return true;
+        }
+        wings.iter().any(|wing| {
+            let state = &wing.state;
+            if !interactive(state) {
+                return false;
+            }
+            let bounds = (
+                state.origin.0 as f32,
+                state.origin.1 as f32,
+                (state.origin.0 + state.size.0) as f32,
+                (state.origin.1 + state.size.1) as f32,
+            );
+            let destination = (
+                state.destination.0 as f32,
+                state.destination.1 as f32,
+                (state.destination.0 + state.size.0) as f32,
+                (state.destination.1 + state.size.1) as f32,
+            );
+            let connected = |bounds| {
+                inside(bounds, point)
+                    || (self.settings.entrance == PanelEntrance::Island
+                        && !matches!(state.role, Role::Card(_))
+                        && across_gap(island, bounds, point, 12.0 * self.scale))
+            };
+            state.pressed.is_some() || connected(bounds) || (state.opening && connected(destination))
+        })
+    }
+
     pub(super) fn parent(&self) -> HWND {
         self.left.state.parent
     }
@@ -1289,11 +1617,14 @@ impl TopPanel {
         let interacting = self.card.state.pressed.is_some()
             || crate::platform::system_tray::is_open()
             || (self.card.state.visible && matches!(self.card.state.role, Role::Card(Block::Tray)));
-        if !fullscreen && (at_edge || over_panel || interacting) {
+        let over_island =
+            self.settings.entrance == PanelEntrance::Island && inside(island, (point.x as f32, point.y as f32));
+        let over_panel = over_panel || self.interacting_at(island, (point.x as f32, point.y as f32));
+        if !fullscreen && (at_edge || over_panel || over_island || interacting) {
             self.last_inside = Instant::now();
             self.revealed = true;
         }
-        if self.last_inside.elapsed().as_millis() > 650 && !over_panel && !interacting {
+        if self.last_inside.elapsed().as_millis() > 650 && !over_panel && !over_island && !interacting {
             self.revealed = false;
         }
         let suppressed = hidden || fullscreen || (self.settings.auto_hide && !self.revealed);
@@ -1302,7 +1633,11 @@ impl TopPanel {
         let icon =
             self.snapshot.active.as_ref().and_then(|w| self.icons.get(&w.path, (20.0 * self.scale).ceil() as u32));
         let scale = self.scale;
-        let y = self.top() as i32 - (2.0 * scale) as i32;
+        let y = if self.settings.entrance == PanelEntrance::Island {
+            (island.1 - 10.0 * scale).round() as i32
+        } else {
+            self.top() as i32 - (2.0 * scale) as i32
+        };
         for wing in [&mut self.left, &mut self.right, &mut self.card] {
             let dragging = wing.state.pressed == Some(Hit::Volume);
             let volume = wing.state.snapshot.volume;
@@ -1313,7 +1648,7 @@ impl TopPanel {
             }
             wing.state.icon = icon.clone();
         }
-        let left_x = self.monitor.work.left + (6.0 * scale) as i32;
+        let mut left_x = self.monitor.work.left + (6.0 * scale) as i32;
         let controls = if self.settings.clear_window_controls { 144.0 * scale } else { 0.0 };
         let edge = self.monitor.work.right - ((6.0 * scale) + controls) as i32;
         let left_bound = if (y as f32) < island.3 + 8.0 * scale && y as f32 + 54.0 * scale > island.1 - 8.0 * scale {
@@ -1324,7 +1659,27 @@ impl TopPanel {
         let base = self.right.state.dimensions().0 - self.right.state.tray_width;
         self.right.state.fit_tray((edge as f32 - left_bound) / scale - base);
         let right_w = self.right.state.dimensions().0 * scale;
-        let right_x = self.monitor.work.right - right_w.ceil() as i32 - ((6.0 * scale) + controls) as i32;
+        let mut right_x = self.monitor.work.right - right_w.ceil() as i32 - ((6.0 * scale) + controls) as i32;
+        let left_w = self.left.state.dimensions().0 * scale;
+        if self.settings.entrance == PanelEntrance::Island {
+            left_x = (island.0 - self.settings.island_gap as f32 * scale - left_w).round() as i32;
+            right_x = (island.2 + self.settings.island_gap as f32 * scale).round() as i32;
+        }
+        for (wing, x, left) in [(&mut self.left, left_x, true), (&mut self.right, right_x, false)] {
+            let width = (wing.state.dimensions().0 * scale).ceil() as i32;
+            wing.state.boundary = (self.settings.entrance == PanelEntrance::Island)
+                .then_some((if left { island.0 } else { island.2 }, left));
+            wing.state.departure = match self.settings.entrance {
+                PanelEntrance::Island => (if left { island.0 as i32 } else { island.2 as i32 - width }, y),
+                PanelEntrance::Sides => {
+                    (if left { self.monitor.bounds.left - width } else { self.monitor.bounds.right }, y)
+                }
+                PanelEntrance::Top => (x, self.monitor.bounds.top - (54.0 * scale).ceil() as i32),
+            };
+            if (hidden || fullscreen) && wing.state.visible {
+                wing.state.hide();
+            }
+        }
         let collision = |x: i32, width: f32| {
             overlaps(
                 (x as f32, y as f32, x as f32 + width * scale, y as f32 + 54.0 * scale),
@@ -1336,12 +1691,16 @@ impl TopPanel {
             scale,
             !suppressed
                 && (self.settings.application || !left_blocks(&self.settings).is_empty())
+                && left_x >= self.monitor.work.left
                 && !collision(left_x, self.left.state.dimensions().0),
         );
         self.right.place(
             (right_x, y),
             scale,
-            !suppressed && !blocks(&self.settings).is_empty() && !collision(right_x, self.right.state.dimensions().0),
+            !suppressed
+                && right_x + right_w.ceil() as i32 <= edge
+                && !blocks(&self.settings).is_empty()
+                && !collision(right_x, self.right.state.dimensions().0),
         );
         if suppressed {
             self.card.state.hide();
@@ -1429,7 +1788,9 @@ impl TopPanel {
             self.right.state.origin.0 + self.right.state.size.0 - width as i32
         };
         let x = x.clamp(self.monitor.work.left, (self.monitor.work.right - width as i32).max(self.monitor.work.left));
-        let y = self.top() as i32 + (44.0 * self.scale) as i32;
+        let y =
+            if block == Block::Application { self.left.state.destination.1 } else { self.right.state.destination.1 }
+                + (54.0 * self.scale) as i32;
         self.card.place((x, y), self.scale, true);
     }
 
@@ -1480,6 +1841,9 @@ impl TopPanel {
 
     pub fn set_capture_hidden(&self, hidden: bool) {
         for wing in [&self.left, &self.right, &self.card] {
+            if let Some(visual) = &*wing.state.reveal.borrow() {
+                visual.capture_hidden(hidden);
+            }
             unsafe {
                 let _ =
                     SetWindowDisplayAffinity(wing.state.hwnd, if hidden { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE });

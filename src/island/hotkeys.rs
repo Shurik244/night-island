@@ -138,7 +138,9 @@ impl App {
     fn hide_window(&mut self) {
         self.finish_cover_motion();
         self.ui.home.track_transition.finish();
-        self.hide_notification_card();
+        if self.gaming || !self.pet_notification_visible() {
+            self.hide_notification_card();
+        }
         self.cancel_pill_motion();
         self.kill_timer(Timer::Expand);
         self.kill_timer(Timer::Liquid);

@@ -4,6 +4,7 @@ use crate::ui::pet_design::PetDesign;
 
 impl App {
     pub(in crate::island) fn sync_pet_studio(&mut self) {
+        self.ui.chat.pet.source = PetDesign::for_character(self.settings.character, &self.settings.custom_pet);
         self.ui.chat.pet.performance = self.settings.pet_performance;
         if self.ui.chat.pet.enabled {
             self.ui.chat.pet.preview_started.get_or_insert_with(Instant::now);
@@ -40,6 +41,13 @@ impl App {
             return;
         }
         match action {
+            view::PetStudioHit::Body => {
+                let studio = &mut self.ui.chat.pet;
+                let design = studio.draft.get_or_insert_with(|| studio.source.clone());
+                design.body = design.body.next();
+                studio.applied = false;
+                studio.error = None;
+            }
             view::PetStudioHit::Apply => {
                 let Some(design) = self.ui.chat.pet.draft.clone() else { return };
                 self.settings.custom_pet = design;

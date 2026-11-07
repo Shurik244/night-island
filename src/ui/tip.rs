@@ -3,8 +3,7 @@ use std::sync::Once;
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_METRICS,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS,
 };
 use windows::Win32::Graphics::Gdi::{
     AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, CreateCompatibleDC,
@@ -133,15 +132,7 @@ fn window() -> HWND {
 
 fn measure(gpu: &Gpu, text: &str, size: f32) -> Result<(f32, f32)> {
     unsafe {
-        let format = gpu.dwrite().CreateTextFormat(
-            w!("Segoe UI"),
-            None,
-            DWRITE_FONT_WEIGHT_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            size,
-            w!("en-us"),
-        )?;
+        let format = crate::ui::fonts::format(gpu.dwrite(), size, DWRITE_FONT_WEIGHT_NORMAL)?;
         let wide: Vec<u16> = text.encode_utf16().collect();
         let layout = gpu.dwrite().CreateTextLayout(&wide, &format, 420.0 * size, 200.0 * size)?;
         let mut m = DWRITE_TEXT_METRICS::default();

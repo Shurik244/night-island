@@ -168,7 +168,7 @@ fn icon_bucket(pixels: u32) -> u32 {
     pixels.clamp(64, 256).next_power_of_two().min(256)
 }
 
-fn normalize_dock_icon(icon: Icon) -> Icon {
+pub fn normalize_dock_icon(icon: Icon) -> Icon {
     let side = icon.side as usize;
     if side == 0 || icon.bgra.len() != side * side * 4 {
         return icon;

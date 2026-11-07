@@ -94,10 +94,12 @@ pub(in crate::island) enum Timer {
     NotificationExpire = 40,
     NotificationHover = 41,
     TopPanel = 42,
+    WaveSearch = 43,
+    Taskbar = 44,
 }
 
 impl Timer {
-    const ALL: [Timer; 42] = [
+    const ALL: [Timer; 44] = [
         Timer::Expand,
         Timer::Collapse,
         Timer::Shrink,
@@ -140,6 +142,8 @@ impl Timer {
         Timer::NotificationExpire,
         Timer::NotificationHover,
         Timer::TopPanel,
+        Timer::WaveSearch,
+        Timer::Taskbar,
     ];
 
     fn from_id(id: usize) -> Option<Timer> {
@@ -149,12 +153,18 @@ impl Timer {
 
 impl App {
     pub(in crate::island) fn kill_timer(&self, timer: Timer) {
+        if matches!(timer, Timer::Expand) {
+            self.pointer.expand_pending.set(false);
+        }
         unsafe {
             let _ = KillTimer(Some(self.hwnd), timer as usize);
         }
     }
 
     pub(in crate::island) fn set_timer(&self, timer: Timer, ms: u32) {
+        if matches!(timer, Timer::Expand) && self.pointer.expand_pending.replace(true) {
+            return;
+        }
         unsafe {
             SetTimer(Some(self.hwnd), timer as usize, ms, None);
         }
@@ -229,6 +239,7 @@ impl App {
         let Some(timer) = Timer::from_id(id) else { return };
         self.kill_timer(timer);
         match timer {
+            Timer::Taskbar => self.configure_taskbar_replacement(),
             Timer::TopPanel => self.update_top_panel(false),
             Timer::NotificationStage => self.notification_stage(),
             Timer::NotificationExpire => self.dismiss_notification_card(),
@@ -237,7 +248,13 @@ impl App {
             Timer::Expand if self.character_interacting() => {}
             Timer::Expand if matches!(self.state, State::Hidden | State::Hiding) => self.reveal(),
             Timer::Expand => self.expand(),
-            Timer::Collapse => self.collapse(),
+            Timer::Collapse => {
+                if self.interacting_with_top_panel() {
+                    self.set_timer(Timer::Collapse, self.settings.close_delay_ms.max(80));
+                } else {
+                    self.collapse();
+                }
+            }
             Timer::Shrink => self.shrink_window(),
             Timer::Autohide => self.hide(),
             Timer::HideDone => self.hide_done(),
@@ -256,11 +273,17 @@ impl App {
             Timer::PillBack => self.pill_back_tick(),
             Timer::GhostHold => self.ghost_hold_tick(),
             Timer::Activity => self.on_activity_timer(),
-            Timer::Settle => self.settle_layers(),
+            Timer::Settle => {
+                if self.cover_flight_until.is_some_and(|until| Instant::now() >= until) {
+                    self.finish_cover_motion();
+                }
+                self.settle_layers();
+            }
             Timer::UiAnim => self.ui_anim_tick(),
             Timer::VpnWait => self.vpn_wait_over(),
             Timer::SteamPoll => self.on_steam_poll(),
             Timer::Tip => self.show_tip(),
+            Timer::WaveSearch => self.submit_wave_search(),
             Timer::Geo => {
                 if self.ui.tab == view::Tab::Weather && self.ui.editing {
                     weather::search(self.hwnd, &self.ui.city.input.text());
@@ -286,6 +309,7 @@ impl App {
                     let _ = self.collapsed.paint(&self.gpu, |p| {
                         let _ = view::paint_collapsed(p, c, self.scale, &self.ui);
                     });
+                    self.paint_progress_fill();
                     self.start_progress_timer();
                 }
             }
@@ -299,12 +323,14 @@ impl App {
                 self.ui.notice = None;
                 self.notice_link = None;
                 self.update_eq();
+                self.maybe_show_notification();
                 self.repaint_collapsed();
             }
             Timer::Volume => {
                 self.ui.volume = None;
                 self.update_eq();
                 self.repaint_collapsed();
+                self.maybe_show_notification();
             }
             Timer::NoteSave => self.save_note(),
             Timer::Clip => self.on_clipboard(),

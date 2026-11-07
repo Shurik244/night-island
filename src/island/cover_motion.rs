@@ -14,12 +14,12 @@ impl App {
     }
 
     pub(in crate::island) fn start_cover_motion(&mut self, expanded: bool) {
-        if self.ui.tab != view::Tab::Home || !crate::ui::feedback::motion_allowed() {
+        if self.ui.tab != view::Tab::Home || !self.settings.island_animations || !crate::ui::feedback::motion_allowed()
+        {
             self.finish_cover_motion();
             return;
         }
-        let (offset, size, _) = self.pill(self.win, false, false);
-        let Some(small) = view::pill_cover_rect((offset.X, offset.Y, size.X, size.Y), self.scale, &self.ui) else {
+        let Some(small) = view::pill_cover_rect(self.pill_rect(false), self.scale, &self.ui) else {
             self.finish_cover_motion();
             return;
         };
@@ -40,14 +40,32 @@ impl App {
                 self.cover_layer.sprite.SetOffset(Vector3 { X: from.0, Y: from.1, Z: 0.0 })?;
                 self.cover_layer.sprite.SetSize(Vector2 { X: from.2 - from.0, Y: from.3 - from.1 })?;
             }
-            let ms = if expanded { self.open_ms() } else { self.close_ms() };
-            let offset = self.compositor.CreateVector3KeyFrameAnimation()?;
-            offset.InsertKeyFrameWithEasingFunction(1.0, Vector3 { X: to.0, Y: to.1, Z: 0.0 }, &self.ease()?)?;
-            offset.SetDuration(Duration::from_millis(ms).into())?;
-            self.cover_layer.sprite.StartAnimation(h!("Offset"), &offset)?;
-            self.cover_layer
-                .sprite
-                .StartAnimation(h!("Size"), &self.spring(Vector2 { X: to.2 - to.0, Y: to.3 - to.1 }, ms)?)?;
+            let ms = self.transition_ms(expanded);
+            if self.open_motion.is_some() {
+                self.cover_layer.sprite.StartAnimation(
+                    h!("Offset"),
+                    &self.open_vector3(|p| Vector3 {
+                        X: small.0 + (large.0 - small.0) * p,
+                        Y: small.1 + (large.1 - small.1) * p,
+                        Z: 0.0,
+                    })?,
+                )?;
+                self.cover_layer.sprite.StartAnimation(
+                    h!("Size"),
+                    &self.open_vector(
+                        Vector2 { X: small.2 - small.0, Y: small.3 - small.1 },
+                        Vector2 { X: large.2 - large.0, Y: large.3 - large.1 },
+                    )?,
+                )?;
+            } else {
+                let offset = self.compositor.CreateVector3KeyFrameAnimation()?;
+                offset.InsertKeyFrameWithEasingFunction(1.0, Vector3 { X: to.0, Y: to.1, Z: 0.0 }, &self.ease()?)?;
+                offset.SetDuration(Duration::from_millis(ms).into())?;
+                self.cover_layer.sprite.StartAnimation(h!("Offset"), &offset)?;
+                self.cover_layer
+                    .sprite
+                    .StartAnimation(h!("Size"), &self.spring(Vector2 { X: to.2 - to.0, Y: to.3 - to.1 }, ms)?)?;
+            }
             self.cover_layer.sprite.SetIsVisible(true)?;
             self.cover_flight_until = Some(Instant::now() + Duration::from_millis(ms));
             self.ui.cover_in_flight = true;
@@ -60,7 +78,9 @@ impl App {
         }
         self.repaint_collapsed();
         self.repaint_expanded();
-        self.set_timer(Timer::UiAnim, self.frame_ms());
+        if expanded {
+            self.set_timer(Timer::Settle, self.transition_ms(true) as u32 + 30);
+        }
     }
 }
 
@@ -128,8 +148,15 @@ mod tests {
                 app.ui.char_inset = CHAR_INSET;
                 app.place(Win::Big);
                 app.state = State::Expanded;
+                let expected = view::pill_cover_rect(app.pill_rect(false), scale, &app.ui).unwrap();
                 app.start_cover_motion(true);
                 if crate::ui::feedback::motion_allowed() {
+                    let source = app.cover_layer.sprite.Offset()?;
+                    let size = app.cover_layer.sprite.Size()?;
+                    assert!((source.X - expected.0).abs() < 0.01, "{edge:?} at {scale}");
+                    assert!((source.Y - expected.1).abs() < 0.01, "{edge:?} at {scale}");
+                    assert!((size.X - (expected.2 - expected.0)).abs() < 0.01);
+                    assert!((size.Y - (expected.3 - expected.1)).abs() < 0.01);
                     assert!(app.ui.cover_in_flight, "{edge:?} at {scale}");
                     assert!(app.cover_layer.sprite.IsVisible()?);
                     let before = app.cover_layer.sprite.Offset()?;
@@ -153,6 +180,9 @@ mod tests {
                 {
                     let folder = std::path::PathBuf::from(folder);
                     std::fs::create_dir_all(&folder).unwrap();
+                    app.ui.cfg.header_icon_colors = true;
+                    app.ui.cfg.header_tabs =
+                        ["Clipboard", "Note", "Weather", "Record", "My Wave"].map(String::from).to_vec();
                     let old = app.ui.media.clone();
                     app.ui.media.title = "Night Drive".into();
                     app.ui.media.artist = "Chromatic".into();
@@ -184,6 +214,41 @@ mod tests {
                         encoder.set_depth(png::BitDepth::Eight);
                         encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
                     }
+                }
+                if scale == 1.0
+                    && edge == Edge::Top
+                    && let Some(path) = std::env::var_os("NI_HEADER_SELECTION_PREVIEW")
+                {
+                    app.ui.cfg.header_icon_colors = true;
+                    app.ui.cfg.header_tabs =
+                        ["Clipboard", "Note", "Weather", "Record", "My Wave"].map(String::from).to_vec();
+                    app.ui.feedback.set_enabled(false);
+                    let surface = crate::ui::popup::PopupSurface::new((640, 198))?;
+                    surface.paint(&app.gpu, |p| {
+                        p.fill_rect((0.0, 0.0, 640.0, 198.0), crate::ui::gfx::rgba(0.025, 0.025, 0.03, 1.0))?;
+                        for (row, (tab, modern)) in
+                            [(view::Tab::Clipboard, true), (view::Tab::Yandex, true), (view::Tab::Clipboard, false)]
+                                .into_iter()
+                                .enumerate()
+                        {
+                            let y = row as f32 * 66.0;
+                            app.ui.tab = tab;
+                            app.ui.cfg.header_active_accent = modern;
+                            app.ui.hover_tab = Some(0);
+                            p.push_clip((0.0, y, 640.0, y + 62.0));
+                            view::paint_expanded(p, (0.0, y, 640.0, 384.0), 1.0, &app.ui, &[])?;
+                            p.pop_clip();
+                        }
+                        Ok(())
+                    })?;
+                    let mut pixels = surface.pixels();
+                    for pixel in pixels.chunks_exact_mut(4) {
+                        pixel.swap(0, 2);
+                    }
+                    let mut encoder = png::Encoder::new(std::fs::File::create(path).unwrap(), 640, 198);
+                    encoder.set_color(png::ColorType::Rgba);
+                    encoder.set_depth(png::BitDepth::Eight);
+                    encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
                 }
                 drop(app);
                 unsafe {

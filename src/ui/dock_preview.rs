@@ -115,6 +115,8 @@ struct State {
     hover: Option<usize>,
     pressed: Option<usize>,
     visible: bool,
+    closing: bool,
+    reveal: crate::ui::reveal::Reveal,
     last_inside: Instant,
     dismissed: bool,
     thumbnail_attempt: Instant,
@@ -158,7 +160,45 @@ impl State {
         if let Some((_, surface)) = &*surface
             && surface.paint(&self.gpu, |p| self.paint(p)).is_ok()
         {
-            let _ = surface.present(self.hwnd, None, 255);
+            let _ = surface.present(self.hwnd, None, (self.reveal.value(Instant::now()) * 255.0).round() as u8);
+        }
+    }
+
+    fn animate_visibility(&mut self, show: bool) {
+        let ms = if self.settings.animations && crate::ui::feedback::motion_allowed() {
+            if show { 170 } else { 120 }
+        } else {
+            1
+        };
+        self.closing = !show;
+        self.reveal.retarget(show, ms, crate::data::settings::AnimCurve::Smooth, Instant::now());
+        self.visibility_frame();
+    }
+
+    fn visibility_frame(&mut self) {
+        let now = Instant::now();
+        let alpha = self.reveal.value(now);
+        let opacity = (alpha * 255.0).round() as u8;
+        if let Some((_, surface)) = &*self.surface.borrow() {
+            let _ = surface.present(self.hwnd, None, opacity);
+        }
+        if let Some(backdrop) = &self.backdrop {
+            backdrop.set_opacity(alpha);
+        }
+        if let Some(thumbnail) = &self.thumbnail {
+            thumbnail.set_opacity(opacity);
+        }
+        if self.reveal.active(now) {
+            unsafe {
+                SetTimer(Some(self.hwnd), 1, if self.settings.economy { 33 } else { 10 }, None);
+            }
+        } else {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), 1);
+            }
+            if self.closing {
+                self.hide();
+            }
         }
     }
 
@@ -346,6 +386,9 @@ impl State {
             backdrop.show(self.origin, size, self.scale, self.visible && self.settings.blur);
         }
         self.update_thumbnail();
+        if let Some(backdrop) = &self.backdrop {
+            backdrop.set_opacity(self.reveal.value(Instant::now()));
+        }
         self.invalidate();
     }
 
@@ -366,6 +409,8 @@ impl State {
         });
         if !self.thumbnail_visible {
             self.thumbnail.take();
+        } else if let Some(thumbnail) = &self.thumbnail {
+            thumbnail.set_opacity((self.reveal.value(Instant::now()) * 255.0).round() as u8);
         }
     }
 
@@ -630,6 +675,8 @@ impl State {
 
     fn hide(&mut self) {
         self.visible = false;
+        self.closing = false;
+        self.reveal = crate::ui::reveal::Reveal::new(0.0);
         if let Some(backdrop) = &self.backdrop {
             backdrop.hide();
         }
@@ -642,6 +689,7 @@ impl State {
         self.actions.clear();
         self.snapshot = Snapshot::default();
         unsafe {
+            let _ = KillTimer(Some(self.hwnd), 1);
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
     }
@@ -650,7 +698,7 @@ impl State {
         match action {
             Action::Dismiss => {
                 self.dismissed = true;
-                self.hide();
+                self.animate_visibility(false);
             }
             Action::Open => {
                 let window = self.entry.windows.get(self.window_index).cloned();
@@ -741,6 +789,11 @@ extern "system" fn proc(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESU
             return DefWindowProcW(hwnd, message, w, l);
         }
         match message {
+            WM_TIMER if w.0 == 1 => {
+                let _ = KillTimer(Some(hwnd), 1);
+                (*ptr).visibility_frame();
+                LRESULT(0)
+            }
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
             WM_ERASEBKGND => LRESULT(1),
             WM_PAINT => {
@@ -889,6 +942,8 @@ impl Preview {
             hover: None,
             pressed: None,
             visible: false,
+            closing: false,
+            reveal: crate::ui::reveal::Reveal::new(0.0),
             last_inside: Instant::now(),
             dismissed: false,
             thumbnail_attempt: Instant::now(),
@@ -904,9 +959,8 @@ impl Preview {
     }
 
     pub fn show(&mut self, entry: &Entry, anchor: Rect, work: RECT, scale: f32) {
-        if self.state.visible {
-            self.state.hide();
-        }
+        self.state.thumbnail.take();
+        self.state.thumbnail_visible = false;
         self.state.entry = entry.clone();
         self.state.window_index = entry.windows.iter().position(|w| w.active).unwrap_or(0);
         self.state.media_id = None;
@@ -919,6 +973,7 @@ impl Preview {
         self.state.pressed = None;
         self.state.hover = None;
         self.state.error = None;
+        self.state.animate_visibility(true);
         let target = entry
             .windows
             .first()
@@ -948,11 +1003,20 @@ impl Preview {
         }
     }
 
+    pub fn repaint_icons(&self) {
+        if self.state.visible {
+            self.state.invalidate();
+        }
+    }
+
     pub fn refresh_actions(&mut self) {
         if !self.state.visible {
             return;
         }
         let mut snapshot = self.state.actions.snapshot();
+        if snapshot.target != self.state.snapshot.target {
+            return;
+        }
         if self.state.pressed.and_then(|i| self.state.buttons.get(i)).is_some_and(|b| b.action == Action::Volume) {
             snapshot.audio = self.state.snapshot.audio.clone();
         }
@@ -1023,8 +1087,13 @@ impl Preview {
         }
         if over_source || self.contains(point) || self.state.pressed.is_some() {
             self.state.last_inside = Instant::now();
-        } else if self.state.last_inside.elapsed() > Duration::from_millis(450) {
-            self.state.hide();
+            if self.state.closing && !self.state.dismissed {
+                self.state.animate_visibility(true);
+            }
+        } else if self.state.last_inside.elapsed() > Duration::from_millis(250) {
+            if !self.state.closing {
+                self.state.animate_visibility(false);
+            }
             return;
         }
         self.refresh_actions();

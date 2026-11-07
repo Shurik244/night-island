@@ -21,6 +21,50 @@ pub struct Window {
     pub island_settings: bool,
 }
 
+#[derive(Default)]
+struct WindowCache {
+    windows: Vec<Window>,
+    scanned: Option<std::time::Instant>,
+    foreground: isize,
+    pending: bool,
+}
+
+static WINDOW_CACHE: std::sync::Mutex<WindowCache> =
+    std::sync::Mutex::new(WindowCache { windows: Vec::new(), scanned: None, foreground: 0, pending: false });
+
+pub fn cached_windows() -> Vec<Window> {
+    let foreground = unsafe { GetForegroundWindow() }.0 as isize;
+    let Ok(mut cache) = WINDOW_CACHE.lock() else { return Vec::new() };
+    let request = !cache.pending
+        && (cache.scanned.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(2))
+            || cache.foreground != foreground);
+    if request {
+        cache.pending = true;
+        cache.foreground = foreground;
+        cache.scanned = Some(std::time::Instant::now());
+    }
+    let mut snapshot = cache.windows.clone();
+    drop(cache);
+    for window in &mut snapshot {
+        window.active = window.handle == foreground;
+    }
+    if request {
+        let worker = std::thread::Builder::new().name("dock-windows".into()).spawn(|| {
+            let snapshot = windows();
+            if let Ok(mut cache) = WINDOW_CACHE.lock() {
+                cache.windows = snapshot;
+                cache.pending = false;
+            }
+        });
+        if worker.is_err()
+            && let Ok(mut cache) = WINDOW_CACHE.lock()
+        {
+            cache.pending = false;
+        }
+    }
+    snapshot
+}
+
 #[derive(Clone, Debug)]
 pub struct Monitor {
     pub device: String,

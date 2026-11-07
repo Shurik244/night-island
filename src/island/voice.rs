@@ -5,8 +5,15 @@ use crate::services::assistant::tools::{self, Tool};
 use crate::services::assistant::{Cap, Level, env, memory, recent, shell};
 use crate::services::attach::{self, Attachment};
 use crate::ui::i18n::tr;
+use crate::ui::pet_speech::VoicePhase;
 
 impl App {
+    fn voice_phase(&mut self, phase: VoicePhase) {
+        self.pet.voice_phase = phase;
+        self.pet.char_key = None;
+        self.set_timer(Timer::Char, 1);
+    }
+
     fn cue(&self, cue: sounds::Cue) {
         sounds::play(cue, self.settings.assistant.cue_volume());
     }
@@ -26,10 +33,46 @@ impl App {
     }
 
     pub(in crate::island) fn toggle_dictation(&mut self) {
+        self.toggle_voice_input(self.settings.pet_voice_input && self.pet.desktop.is_some());
+    }
+
+    pub(in crate::island) fn pet_voice_input(&mut self) {
+        if !self.settings.pet_voice_input {
+            return;
+        }
+        if self.pet.voice_phase.pending() && !dictation::active()
+            || speech::busy()
+            || self.agent.as_ref().is_some_and(|run| run.phase == Phase::Speaking)
+        {
+            self.cancel_voice_input();
+        } else {
+            self.toggle_voice_input(true);
+        }
+    }
+
+    pub(in crate::island) fn cancel_voice_input(&mut self) -> bool {
+        if self.pet.voice_phase == VoicePhase::Idle && self.agent.is_none() && !speech::busy() {
+            return false;
+        }
+        dictation::stop();
+        speech::stop();
+        self.pending_power = None;
+        self.pending_ask = None;
+        self.clear_notice();
+        self.end_wake_session();
+        true
+    }
+
+    fn toggle_voice_input(&mut self, directed: bool) {
         if dictation::active() {
             dictation::stop();
+            self.voice_phase(VoicePhase::Transcribing);
             self.cue(sounds::Cue::Done);
             self.show_notice_for('\u{F801}', "Recognizing…", 60_000);
+            return;
+        }
+        if self.pet.voice_phase.pending() || ai::busy() {
+            self.notify_for(Notice::Error, '\u{E783}', "Another request is running, try again in a moment", 2500);
             return;
         }
         if !self.speech_ready() {
@@ -38,6 +81,8 @@ impl App {
         wake::pause();
         speech::stop();
         if dictation::start(self.hwnd) {
+            self.wake_session = directed;
+            self.voice_phase(VoicePhase::Recording);
             self.cue(sounds::Cue::Heard);
             self.show_notice_for(
                 '\u{E720}',
@@ -77,6 +122,7 @@ impl App {
     }
 
     pub(in crate::island) fn end_wake_session(&mut self) {
+        self.voice_phase(VoicePhase::Idle);
         self.wake_session = false;
         if let Some(run) = self.agent.take() {
             self.keep_run(&run);
@@ -99,6 +145,8 @@ impl App {
     fn voice_choice(&self) -> speech::Voice {
         let a = &self.settings.assistant;
         speech::Voice {
+            fish_streaming: a.fish_streaming,
+            fish_expressions: a.fish_expressions,
             local: a.local_voice && localvoice::ready(),
             natural: a.natural_voice.then(|| speech::Natural {
                 provider: a.tts_provider,
@@ -113,11 +161,14 @@ impl App {
         if localvoice::install(self.hwnd) {
             self.show_notice_for('\u{E896}', "Downloading the local voice…", 120_000);
         } else {
-            self.notify_for(Notice::Error, '\u{E783}', "The local voice is already being downloaded", 3000);
+            self.notify_for(Notice::Error, '\u{E783}', "Another voice model is being downloaded", 3000);
         }
     }
 
     pub(in crate::island) fn on_local_voice_setup(&mut self) {
+        if self.refresh_guide_voice() {
+            return self.render_settings_win();
+        }
         self.clear_notice();
         match localvoice::state() {
             localvoice::State::Ready => {
@@ -141,11 +192,15 @@ impl App {
         if wake_install::start(self.hwnd) {
             self.show_notice_for('\u{E896}', "Downloading the wake-word model…", 120_000);
         } else {
-            self.notify_for(Notice::Error, '\u{E783}', "The wake-word model is already being downloaded", 3000);
+            self.notify_for(Notice::Error, '\u{E783}', "Another voice model is being downloaded", 3000);
         }
     }
 
     pub(in crate::island) fn on_wake_setup(&mut self) {
+        if self.refresh_guide_voice() {
+            self.sync_wake();
+            return self.render_settings_win();
+        }
         self.clear_notice();
         match wake_install::state() {
             wake_install::State::Ready => {
@@ -195,6 +250,7 @@ impl App {
         }
         self.wake_session = true;
         if dictation::start_auto(self.hwnd) {
+            self.voice_phase(VoicePhase::Recording);
             self.cue(sounds::Cue::Heard);
             self.show_notice_for('\u{E720}', "Listening…", (dictation::MAX_SECS as u32 + 5) * 1000);
         } else {
@@ -203,12 +259,20 @@ impl App {
     }
 
     pub(in crate::island) fn on_voice(&mut self) {
-        match dictation::take() {
+        let recording = self.pet.voice_phase != VoicePhase::Idle;
+        let outcome = dictation::take();
+        if !recording {
+            self.sync_wake();
+            return;
+        }
+        self.voice_phase(VoicePhase::Idle);
+        match outcome {
             Some(Ok(wav)) => {
                 if self.wake_session {
                     self.cue(sounds::Cue::Done);
                 }
                 if ai::transcribe(self.hwnd, wav) {
+                    self.voice_phase(VoicePhase::Transcribing);
                     self.show_notice_for('\u{F801}', "Recognizing…", 60_000);
                 } else {
                     self.clear_notice();
@@ -233,7 +297,20 @@ impl App {
             self.show_notice_for('\u{E720}', "Say a command after the name", 2200);
             return self.end_wake_session();
         }
+        let request: String = command.chars().take(600).collect();
+        crate::log_info!("Assistant request: {}", brief(&request, 300));
         let perms = &self.settings.assistant.perms;
+        if self.settings.assistant.yandex_voice
+            && let Some(action) = voicecmd::local_yandex(&request)
+        {
+            crate::log_info!("Assistant action from speech: Yandex({action:?})");
+            self.run_serial += 1;
+            let mut run = Run::new(String::new(), &request, &[]);
+            run.id = self.run_serial;
+            run.direct = true;
+            self.agent = Some(run);
+            return self.handle_tool(Tool::Yandex(action), false, false);
+        }
         let mut notes = String::new();
         if perms.command_level(Cap::Memory, false) != Level::Off {
             notes = memory::prompt_block(&memory::load(), 1500);
@@ -243,9 +320,19 @@ impl App {
             }
         }
         let (offered, can_ask) = (perms.commands_offered(), perms.enabled);
-        let system = voicecmd::system_prompt(&offered, can_ask, &notes, &self.facts());
-        let request: String = command.chars().take(600).collect();
-        crate::log_info!("Assistant request: {}", brief(&request, 300));
+        let mut system = voicecmd::system_prompt(&offered, can_ask, &notes, &self.facts());
+        if self.settings.assistant.yandex_voice && offered.contains(&Cap::Media) {
+            system.push_str(voicecmd::YANDEX_PROMPT);
+        }
+        if self.settings.assistant.natural_voice
+            && self.settings.assistant.fish_expressions
+            && self.settings.assistant.tts_provider == crate::services::assistant::TtsProvider::Fish
+        {
+            system.push_str(&format!(
+                "\nFish Audio reads answer and ask aloud. When it suits the user's request, add a short delivery cue to the spoken text only. Allowed cues: {}. Keep the opening sentence short and informative.",
+                speech::FISH_CUES.join(" "),
+            ));
+        }
         agent::fresh(&mut self.dialog);
         let mut run = Run::new(system, &request, &self.dialog);
         run.max_steps = usize::from(self.settings.assistant.max_steps);
@@ -273,6 +360,7 @@ impl App {
         }
         crate::log_info!("Assistant step {step}: asking the model ({} turns)", turns.len());
         if ai::ask_agent(self.hwnd, turns, system, id) {
+            self.voice_phase(VoicePhase::Command);
             self.show_notice_for('\u{E99A}', "Thinking…", 60_000);
         } else {
             self.fail_by_voice("Another request is running, try again in a moment");
@@ -291,14 +379,14 @@ impl App {
     }
 
     fn say(&mut self, text: &str) {
-        self.last_spoken = text.to_string();
-        let short: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect();
-        self.notify_for(Notice::Ai, '\u{E8F2}', &short, 8000);
+        self.last_spoken = speech::plain_text(text);
+        let visible_text = self.last_spoken.clone();
+        self.notify_for(Notice::Ai, '\u{E8F2}', &visible_text, 8000);
         let (volume, voice) = (self.settings.assistant.voice_volume(), self.voice_choice());
         let chat = self.agent.as_ref().is_some_and(|r| r.did.is_empty() && r.follow_ups < agent::MAX_FOLLOW_UPS);
         let follow = chat && self.settings.assistant.follow_up && self.settings.assistant.perms.enabled;
         if let Some(run) = self.agent.as_mut() {
-            run.spoken = text.to_string();
+            run.spoken.clone_from(&self.last_spoken);
             if follow {
                 run.waiting = true;
                 run.following = true;
@@ -315,6 +403,7 @@ impl App {
     }
 
     fn wait_for_result(&mut self) {
+        self.voice_phase(VoicePhase::Command);
         if let Some(run) = self.agent.as_mut() {
             run.waiting = true;
         }
@@ -329,8 +418,9 @@ impl App {
     }
 
     fn ask_user(&mut self, glyph: char, text: &str) {
-        self.last_spoken = text.to_string();
-        self.notify_for(Notice::Integrations, glyph, text, (voicecmd::CONFIRM_SECS * 1000) as u32);
+        self.last_spoken = speech::plain_text(text);
+        let visible_text = self.last_spoken.clone();
+        self.notify_for(Notice::Integrations, glyph, &visible_text, (voicecmd::CONFIRM_SECS * 1000) as u32);
         if !self.settings.assistant.perms.enabled || self.agent.is_none() {
             return;
         }
@@ -355,6 +445,7 @@ impl App {
             run.phase = Phase::Listening;
         }
         if dictation::start_auto(self.hwnd) {
+            self.voice_phase(VoicePhase::Recording);
             self.cue(sounds::Cue::Heard);
             self.show_notice_for('\u{E720}', "Listening…", (dictation::MAX_SECS as u32 + 5) * 1000);
         } else {
@@ -406,6 +497,7 @@ impl App {
             crate::log_info!("Assistant: dropped the model's answer to a request that is no longer running");
             return;
         }
+        self.voice_phase(VoicePhase::Idle);
         self.clear_notice();
         let reply = match answer {
             Ok(reply) => reply,
@@ -458,6 +550,13 @@ impl App {
                 "The user's own standing instructions (written by the user, follow them):\n{rules}"
             ));
         }
+        let wave = crate::services::yandex::snapshot();
+        if wave.has_token {
+            extra.push_str(&format!(
+                "Yandex Music is connected. My Wave: {}.\n",
+                if wave.active { "active" } else { "stopped" }
+            ));
+        }
         let scripts = tools::scripts_prompt(700);
         if !scripts.is_empty() {
             extra.push_str(&format!("Saved scripts (run_script): {scripts}\n"));
@@ -472,13 +571,21 @@ impl App {
     }
 
     fn handle_tool(&mut self, tool: Tool, reviewed: bool, confirmed: bool) {
+        if matches!(tool, Tool::Yandex(_)) && !self.settings.assistant.yandex_voice {
+            self.fail_by_voice("Voice commands for My Wave are disabled");
+            return self.end_wake_session();
+        }
         let cap = tool.cap();
         let tainted = self.settings.assistant.ask_after_web && self.agent.as_ref().is_some_and(|r| r.tainted);
         let level = self.settings.assistant.perms.command_level(cap, tainted);
         crate::log_info!("Assistant tool {}: level {level:?}, tainted {tainted}, confirmed {confirmed}", tool.name());
         if level == Level::Off {
             let text = format!("{}: {}", tr(cap.title()), tr("off in the Assistant settings"));
-            return self.fail_by_voice(&text);
+            self.fail_by_voice(&text);
+            if self.agent.as_ref().is_some_and(|run| run.direct) {
+                self.end_wake_session();
+            }
+            return;
         }
         let asks = level == Level::Ask && !confirmed && !tool.looks_only();
         if asks && tool.script() && self.settings.assistant.review && !reviewed {
@@ -493,6 +600,7 @@ impl App {
                 Tool::Cmd(_) | Tool::PowerShell(_) | Tool::Wsl(_) | Tool::RunScript { .. } => "Run:",
                 Tool::SaveScript { .. } => "Save the script:",
                 Tool::Spotify { .. } => "Play on Spotify:",
+                Tool::Yandex(_) => "My Wave",
                 Tool::Fetch(_) | Tool::Render(_) => "Open the page:",
                 Tool::Search(_) => "Search the web:",
                 Tool::ReadFile(_) => "Read:",
@@ -502,7 +610,7 @@ impl App {
             self.pending_ask = Some((voicecmd::Command::Tool(tool), std::time::Instant::now()));
             return self.ask_user('\u{E756}', &text);
         }
-        let signature = format!("{}:{}", tool.name(), tool.detail());
+        let signature = tool.signature();
         if self.agent.as_ref().is_some_and(|r| r.repeated(&signature)) {
             crate::log_warn!("Assistant: the same {} was asked for twice, not running it again", tool.name());
             if let Some(run) = self.agent.as_mut() {
@@ -557,7 +665,18 @@ impl App {
                 if result.is_ok() && tool.external() {
                     run.tainted = true;
                 }
-                run.did_tool(tool.name(), tool.detail(), format!("{}:{}", tool.name(), tool.detail()), result.is_ok());
+                run.did_tool(tool.name(), tool.detail(), tool.signature(), result.is_ok());
+                if run.direct {
+                    let text = result.unwrap_or_else(|why| {
+                        self.cue(sounds::Cue::Error);
+                        tr(&why).into_owned()
+                    });
+                    if let Some(run) = self.agent.as_mut() {
+                        run.said(&serde_json::json!({"action":"answer", "text":text}).to_string());
+                    }
+                    self.say(&text);
+                    return self.end_wake_session();
+                }
                 run.result(tool.name(), &result);
                 self.call_agent();
             }
@@ -758,6 +877,7 @@ impl App {
             voicecmd::Command::Cancel => {
                 self.pending_power = None;
                 self.pending_ask = None;
+                self.cancel_voice_input();
                 self.show_notice_for('\u{E711}', "Cancelled", 1500);
             }
             voicecmd::Command::Answer(text) => self.say(&text),
@@ -774,6 +894,10 @@ impl App {
 
     pub(in crate::island) fn on_transcribed(&mut self) {
         let Some(answer) = ai::take_transcript() else { return };
+        if self.pet.voice_phase != VoicePhase::Transcribing {
+            return;
+        }
+        self.voice_phase(VoicePhase::Idle);
         self.clear_notice();
         match &answer {
             Ok(text) if self.wake_session || self.agent.is_some() => {
@@ -790,6 +914,24 @@ impl App {
             Ok(text) if self.agent.as_ref().is_some_and(|r| r.phase == Phase::Listening) => {
                 let wakes = voicecmd::wake_words(&self.settings.ai.voice_wake);
                 let reply = voicecmd::strip_wake(&text, &wakes).filter(|r| !r.is_empty()).unwrap_or(text);
+                if self.agent.as_ref().is_some_and(|run| run.direct) {
+                    let reply = reply.trim_matches(|c: char| c.is_whitespace() || ".!?,".contains(c)).to_lowercase();
+                    if let Some((command, at)) = self.pending_ask.take()
+                        && at.elapsed().as_secs() <= voicecmd::CONFIRM_SECS
+                        && matches!(
+                            reply.as_str(),
+                            "да" | "да подтверждаю"
+                                | "да, подтверждаю"
+                                | "подтверждаю"
+                                | "yes"
+                                | "confirm"
+                        )
+                    {
+                        return self.handle_command(command, true);
+                    }
+                    self.show_notice_for('\u{E711}', "Cancelled", 1500);
+                    return self.end_wake_session();
+                }
                 if let Some(mut run) = self.agent.take() {
                     if run.following {
                         self.keep_run(&run);

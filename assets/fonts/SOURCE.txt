@@ -1,0 +1,1 @@
+Montserrat fonts from https://github.com/JulietaUla/Montserrat/tree/555facfb2a18c72c3c0380f0d9c0f060453a9058, distributed under SIL Open Font License 1.1 (OFL.txt).

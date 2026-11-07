@@ -53,10 +53,13 @@ impl App {
         if self.music.spectrum_running {
             self.place_spectrum();
         }
-        let c = self.collapsed_surface_rect();
-        let _ = self.collapsed.paint(&self.gpu, |p| {
-            let _ = view::paint_collapsed(p, c, self.scale, &self.ui);
-        });
+        if self.pill_motion.intro != Some(super::pill_motion::IntroPhase::Fading) {
+            let c = self.collapsed_surface_rect();
+            let _ = self.collapsed.paint(&self.gpu, |p| {
+                let _ = view::paint_collapsed(p, c, self.scale, &self.ui);
+            });
+        }
+        self.paint_progress_fill();
         self.update_weather_timer();
         self.maybe_show_notification();
     }
@@ -83,6 +86,10 @@ impl App {
         self.paint_ears();
         self.paint_liquid_body(0.0);
         self.apply_accent();
+        self.repaint_themed_surfaces();
+    }
+
+    pub(in crate::island) fn repaint_themed_surfaces(&mut self) {
         self.repaint();
         self.update_notification_card();
         if let Some(chat) = &mut self.pet.chat {
@@ -102,6 +109,31 @@ impl App {
         }
     }
 
+    pub(in crate::island) fn progress_fill_active(&self) -> bool {
+        view::pill_progress_fill_on(&self.ui) && media::progress().is_some()
+    }
+
+    pub(in crate::island) fn paint_progress_fill(&self) {
+        let progress = media::progress().filter(|_| view::pill_progress_fill_on(&self.ui));
+        let _ = self.progress_fill.paint(&self.gpu, |p| {
+            if let Some((pos, len)) = progress {
+                let pill = self.pill_rect(false);
+                let ear = if self.docked() && self.edge() == Edge::Top { EAR * self.scale } else { 0.0 };
+                let range = (pill.0 - ear, pill.1, pill.0 + pill.2 + ear, pill.1 + pill.3);
+                let size = self.progress_fill.size();
+                let _ = p.fill_progress_surface(
+                    range,
+                    (size.0 as f32, size.1 as f32),
+                    pos / len,
+                    self.ui.media.accent.unwrap_or_else(crate::ui::theme::accent_u8),
+                    self.settings.vertical(),
+                    self.edge() == Edge::Left,
+                );
+            }
+        });
+        self.paint_ears();
+    }
+
     pub(in crate::island) fn paint_ears(&self) {
         let r = EAR * self.scale;
         for (i, ear) in self.ears.iter().enumerate() {
@@ -110,15 +142,29 @@ impl App {
                     let (r, g, b) = crate::ui::theme::panel();
                     crate::ui::gfx::rgba(r, g, b, 1.0)
                 });
+                if let Some((pos, len)) = media::progress().filter(|_| view::pill_progress_fill_on(&self.ui)) {
+                    let width = self.cw * self.scale;
+                    let left = if i == 0 { 0.0 } else { -width - r };
+                    let _ = p.fill_ear_progress(
+                        r,
+                        i == 0,
+                        (left, left + width + r * 2.0),
+                        pos / len,
+                        self.ui.media.accent.unwrap_or_else(crate::ui::theme::accent_u8),
+                    );
+                }
             });
         }
     }
 
     pub(in crate::island) fn repaint(&self) {
-        let c = self.collapsed_surface_rect();
-        let _ = self.collapsed.paint(&self.gpu, |p| {
-            let _ = view::paint_collapsed(p, c, self.scale, &self.ui);
-        });
+        if self.pill_motion.intro != Some(super::pill_motion::IntroPhase::Fading) {
+            let c = self.collapsed_surface_rect();
+            let _ = self.collapsed.paint(&self.gpu, |p| {
+                let _ = view::paint_collapsed(p, c, self.scale, &self.ui);
+            });
+        }
+        self.paint_progress_fill();
         self.repaint_expanded();
     }
 
@@ -226,6 +272,7 @@ impl App {
         match id {
             tray::ID_TOGGLE => self.toggle(),
             tray::ID_SETTINGS => self.open_settings_window(),
+            tray::ID_GUIDE => self.open_guide(),
             tray::ID_RESET_POS => self.reset_position(),
             _ => {}
         }

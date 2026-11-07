@@ -38,31 +38,45 @@ pub fn header_has_labels(ui: &UiState) -> bool {
     movable_tabs(ui).len() <= 5
 }
 
+fn header_icon_color(tab: Tab, ui: &UiState, alpha: f32) -> windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
+    let rgb = if ui.cfg.header_icon_colors {
+        match tab {
+            Tab::Record => (1.0, 0.32, 0.36),
+            Tab::Weather => (1.0, 0.78, 0.32),
+            Tab::Clipboard => (0.38, 0.72, 1.0),
+            Tab::Note => (1.0, 0.8, 0.42),
+            Tab::Ai | Tab::Chat => (0.7, 0.58, 1.0),
+            Tab::Privacy => (0.36, 0.85, 0.63),
+            Tab::Notifications => (1.0, 0.62, 0.3),
+            Tab::Mixer | Tab::Controls => (0.4, 0.8, 0.86),
+            Tab::Yandex => (1.0, 0.93, 0.0),
+            _ => (1.0, 1.0, 1.0),
+        }
+    } else {
+        (1.0, 1.0, 1.0)
+    };
+    rgba(rgb.0, rgb.1, rgb.2, alpha)
+}
+
 fn header_label_widths() -> [f32; TABS.len()] {
     use windows::Win32::Graphics::DirectWrite::*;
-    use windows::core::w;
+    type LabelWidths = (bool, crate::data::settings::InterfaceFont, u64, [f32; TABS.len()]);
     thread_local! {
-        static WIDTHS: std::cell::RefCell<Option<(bool, [f32; TABS.len()])>> = const { std::cell::RefCell::new(None) };
+        static WIDTHS: std::cell::RefCell<Option<LabelWidths>> = const { std::cell::RefCell::new(None) };
     }
     let russian = crate::ui::i18n::is_ru();
     WIDTHS.with_borrow_mut(|cached| {
-        if let Some((language, widths)) = cached.as_ref()
+        if let Some((language, font, revision, widths)) = cached.as_ref()
             && *language == russian
+            && *font == crate::ui::fonts::selected()
+            && *revision == crate::ui::fonts::revision()
         {
             return *widths;
         }
         let measured = (|| -> windows::core::Result<[f32; TABS.len()]> {
             unsafe {
                 let factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-                let format = factory.CreateTextFormat(
-                    w!("Segoe UI"),
-                    None,
-                    DWRITE_FONT_WEIGHT_SEMI_BOLD,
-                    DWRITE_FONT_STYLE_NORMAL,
-                    DWRITE_FONT_STRETCH_NORMAL,
-                    13.0,
-                    w!("en-us"),
-                )?;
+                let format = crate::ui::fonts::format(&factory, 13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?;
                 format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
                 let mut widths = [0.0; TABS.len()];
                 for (index, (_, _, name)) in TABS.iter().enumerate() {
@@ -77,7 +91,7 @@ fn header_label_widths() -> [f32; TABS.len()] {
         })();
         let widths = measured
             .unwrap_or_else(|_| TABS.map(|(_, _, name)| crate::ui::i18n::tr(name).chars().count() as f32 * 8.0));
-        *cached = Some((russian, widths));
+        *cached = Some((russian, crate::ui::fonts::selected(), crate::ui::fonts::revision(), widths));
         widths
     })
 }
@@ -97,10 +111,13 @@ pub fn tab_rects(pill: Rect, scale: f32, ui: &UiState) -> [Rect; TABS.len()] {
     let active_index = available.iter().copied().find(|&i| TABS[i].0 == active);
     let labels = header_has_labels(ui);
     let label_widths = header_label_widths();
-    let desired: f32 = available.iter().map(|&i| 16.0 + label_widths[i]).sum();
-    let label_scale = ((room / scale - gap / scale * (available.len() - 1) as f32) / desired).min(1.0);
+    let padding = if ui.cfg.header_icons { 32.0 } else { 16.0 };
+    let desired: f32 = available.iter().map(|&i| label_widths[i]).sum();
+    let fixed = padding * available.len() as f32 + gap / scale * (available.len() - 1) as f32;
+    let label_scale =
+        ((room / scale - fixed) / desired.max(1.0)).clamp(if ui.cfg.header_icons { 0.78 } else { 0.0 }, 1.0);
     let width = |i: usize| {
-        if labels { (16.0 + label_widths[i]) * label_scale * scale } else { icon_w }
+        if labels { (padding + label_widths[i] * label_scale) * scale } else { icon_w }
     };
     let mut selected = Vec::new();
     let mut used = 0.0;
@@ -257,6 +274,49 @@ pub fn hit_head(pill: Rect, scale: f32, ui: &UiState, px: f32, py: f32) -> Optio
     }
 }
 
+fn active_header_rect(rects: &[Rect; TABS.len()], pill: Rect, scale: f32, ui: &UiState) -> Rect {
+    let index = TABS.iter().position(|tab| tab.0 == bar_tab(ui.tab)).unwrap_or(0);
+    let rect = rects[index];
+    if let Some(drag) = &ui.tab_drag
+        && drag.items.get(drag.reorder.from) == Some(&index)
+    {
+        return drag.reorder.dragged_rect((rect.2 - rect.0, rect.3 - rect.1));
+    }
+    if rect.2 > rect.0 { rect } else { more_rect(pill, scale) }
+}
+
+fn paint_active_header(p: &Painter, rect: Rect, pill: Rect, scale: f32, ui: &UiState) -> Result<()> {
+    let coordinates = [rect.0, rect.1, rect.2, rect.3].map(|target| target / scale);
+    let mut values = coordinates;
+    if ui.cfg.island_animations {
+        for (index, value) in values.iter_mut().enumerate() {
+            *value = ui.feedback.follow(310_000 + index as u64, *value, *value, 260);
+        }
+    }
+    let rect = (values[0] * scale, values[1] * scale + 3.0 * scale, values[2] * scale, values[3] * scale - 3.0 * scale);
+    let radius = (rect.3 - rect.1) / 2.0;
+    let (r, g, b) = crate::ui::theme::accent();
+    let color = (0.4 + r * 0.6, 0.4 + g * 0.6, 0.4 + b * 0.6);
+    p.push_clip((pill.0, pill.1, pill.0 + pill.2, pill.1 + 52.0 * scale));
+    let result = (|| {
+        p.fill_round_rect(rect, radius, rgba(color.0, color.1, color.2, 0.16))?;
+        p.stroke_round_rect(
+            (rect.0 + 0.5 * scale, rect.1 + 0.5 * scale, rect.2 - 0.5 * scale, rect.3 - 0.5 * scale),
+            radius,
+            scale,
+            rgba(color.0, color.1, color.2, 0.34),
+        )?;
+        let center = (rect.0 + rect.2) / 2.0;
+        p.fill_round_rect(
+            (center - 6.0 * scale, rect.3 - 2.0 * scale, center + 6.0 * scale, rect.3),
+            scale,
+            rgba(color.0, color.1, color.2, 0.95),
+        )
+    })();
+    p.pop_clip();
+    result
+}
+
 pub fn paint_expanded(p: &Painter, pill: Rect, scale: f32, ui: &UiState, clips: &[Clip]) -> Result<()> {
     if ui.remind.alert.is_some() {
         return paint_alert(p, pill, scale, ui);
@@ -276,6 +336,9 @@ pub fn paint_expanded(p: &Painter, pill: Rect, scale: f32, ui: &UiState, clips: 
         }
     }
     let carried_index = carried.and_then(|d| d.items.get(d.reorder.from).copied());
+    if ui.cfg.header_active_accent {
+        paint_active_header(p, active_header_rect(&rects, pill, scale, ui), pill, scale, ui)?;
+    }
     let mut order: Vec<usize> = (0..TABS.len()).filter(|&i| Some(i) != carried_index).collect();
     order.extend(carried_index);
     for i in order {
@@ -302,24 +365,38 @@ pub fn paint_expanded(p: &Painter, pill: Rect, scale: f32, ui: &UiState, clips: 
         let selection = ui.feedback.sample(300_000 + i as u64, f32::from(selected), f32::from(selected), 180);
         let hover = ui.feedback.sample(400_000 + i as u64, f32::from(ui.hover_tab == Some(i)), 0.0, 140);
         let base = if !header_has_labels(ui) && tab != Tab::Settings { 0.045 } else { 0.0 };
-        p.fill_round_rect(
-            *rect,
-            radius,
-            rgba(1.0, 1.0, 1.0, base + (0.16 - base) * selection + 0.09 * hover * (1.0 - selection)),
-        )?;
+        let opacity = if ui.cfg.header_active_accent {
+            0.035 * hover * (1.0 - selection)
+        } else {
+            base + (0.16 - base) * selection + 0.09 * hover * (1.0 - selection)
+        };
+        p.fill_round_rect(*rect, radius, rgba(1.0, 1.0, 1.0, opacity))?;
         let alpha = 0.62 + 0.38 * selection;
+        let color = header_icon_color(tab, ui, alpha);
+        let glyph = if tab == Tab::Yandex { crate::ui::icons::YANDEX_MUSIC_GLYPH } else { glyph };
         if header_has_labels(ui) && tab != Tab::Settings {
-            let font = ((rect.2 - rect.0 - 10.0 * scale) / header_label_widths()[i].max(1.0) * 13.0).min(13.0 * scale);
+            let inset = if ui.cfg.header_icons { 28.0 } else { 4.0 } * scale;
+            if ui.cfg.header_icons {
+                p.glyph(glyph, (rect.0 + 6.0 * scale, rect.1, rect.0 + 24.0 * scale, rect.3), 14.0 * scale, color)?;
+            }
+            let available = (rect.2 - rect.0 - inset - 6.0 * scale).max(scale);
+            let mut font = (available / header_label_widths()[i].max(1.0) * 13.0).min(13.0 * scale);
+            let label = crate::ui::i18n::tr(name);
+            let measured =
+                crate::ui::fonts::width(crate::ui::fonts::selected(), &label, font, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+            if measured > available {
+                font *= available / measured * 0.99;
+            }
             p.text(
                 name,
-                (rect.0 + 4.0 * scale, rect.1, rect.2 - 4.0 * scale, rect.3),
+                (rect.0 + inset, rect.1, rect.2 - 4.0 * scale, rect.3),
                 font,
                 DWRITE_FONT_WEIGHT_SEMI_BOLD,
                 DWRITE_TEXT_ALIGNMENT_CENTER,
                 rgba(1.0, 1.0, 1.0, alpha),
             )?;
         } else {
-            p.glyph(glyph, *rect, 17.0 * scale, rgba(1.0, 1.0, 1.0, alpha))?;
+            p.glyph(glyph, *rect, 17.0 * scale, color)?;
         }
     }
     let pin = pin_rect(pill, scale);
@@ -334,11 +411,17 @@ pub fn paint_expanded(p: &Painter, pill: Rect, scale: f32, ui: &UiState, clips: 
     )?;
     let more = more_rect(pill, scale);
     let overflow_active = overflow_tabs(pill, scale, ui).iter().any(|&i| TABS[i].0 == bar_tab(ui.tab));
-    if overflow_active || ui.hover_head == Some(HeadHit::More) {
+    if !ui.cfg.header_active_accent && overflow_active || ui.hover_head == Some(HeadHit::More) {
         p.fill_round_rect(
             more,
             (more.3 - more.1) / 2.0,
-            if overflow_active { acc(0.2) } else { rgba(1.0, 1.0, 1.0, 0.09) },
+            if ui.cfg.header_active_accent {
+                rgba(1.0, 1.0, 1.0, 0.035)
+            } else if overflow_active {
+                acc(0.2)
+            } else {
+                rgba(1.0, 1.0, 1.0, 0.09)
+            },
         )?;
     }
     p.text(
@@ -453,7 +536,15 @@ fn paint_tab(p: &Painter, tab: Tab, pill: Rect, scale: f32, ui: &UiState, clips:
             paint_controls(p, pill, scale, ui)?;
             paint_metrics_row(p, pill, scale, ui)?;
         }
-        Tab::Yandex => paint_yandex(p, pill, scale, &ui.yandex, ui.home.seek, crate::services::yandex::progress())?,
+        Tab::Yandex => paint_yandex(
+            p,
+            pill,
+            scale,
+            &ui.yandex,
+            (ui.editing && !ui.cmd.open, ui.caret_on),
+            ui.home.seek,
+            crate::services::yandex::progress(),
+        )?,
         Tab::Mixer => paint_mixer(p, pill, scale, &ui.mixer)?,
         Tab::Notifications => paint_notifications(
             p,
@@ -474,6 +565,32 @@ fn paint_tab(p: &Painter, tab: Tab, pill: Rect, scale: f32, ui: &UiState, clips:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_header_targets_the_current_tab_or_its_overflow_button() {
+        let mut ui = UiState::new();
+        for scale in [0.75, 1.0, 1.5, 2.0] {
+            for width in [460.0, 640.0, 800.0] {
+                let pill = (12.0, 8.0, width * scale, 384.0 * scale);
+                for &(tab, _, _) in &TABS {
+                    ui.tab = tab;
+                    let rects = tab_rects(pill, scale, &ui);
+                    let target = active_header_rect(&rects, pill, scale, &ui);
+                    assert!(target.2 > target.0 && target.3 > target.1);
+                    let active = TABS.iter().position(|entry| entry.0 == bar_tab(tab)).unwrap();
+                    assert_eq!(
+                        target,
+                        if rects[active].2 > rects[active].0 { rects[active] } else { more_rect(pill, scale) }
+                    );
+                }
+            }
+        }
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(settings.header_active_accent);
+        super::settings::toggle_set(super::settings::Sid::HeaderActiveAccent, &mut settings, false);
+        let saved: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert!(!saved.header_active_accent);
+    }
 
     #[test]
     fn removing_an_active_header_tab_moves_it_to_more_without_hiding_the_feature() {
@@ -554,8 +671,18 @@ mod tests {
         assert!(header_has_labels(&ui));
         ui.cfg.header_tabs =
             ["Privacy", "Activity", "Controls", "App mixer", "Notifications"].map(String::from).to_vec();
+        ui.cfg.header_icons = false;
         let rects = tab_rects((0.0, 0.0, 640.0, 384.0), 1.0, &ui);
         assert!(movable_tabs(&ui).iter().all(|&i| rects[i].2 > rects[i].0));
+        ui.cfg.header_icons = true;
+        ui.tab = Tab::Notifications;
+        let rects = tab_rects((0.0, 0.0, 640.0, 384.0), 1.0, &ui);
+        let active = TABS.iter().position(|tab| tab.0 == Tab::Notifications).unwrap();
+        assert!(rects[active].2 > rects[active].0);
+        assert!(ui.cfg.header_icons);
+        let saved: Settings = serde_json::from_str(&serde_json::to_string(&ui.cfg).unwrap()).unwrap();
+        assert!(saved.header_icons);
+        assert!(!saved.header_icon_colors);
     }
 
     #[test]

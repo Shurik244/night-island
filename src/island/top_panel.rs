@@ -3,6 +3,16 @@ use crate::platform::desktop_dock as desktop;
 use crate::ui::top_panel::{Block, Request, TopPanel};
 
 impl App {
+    pub(in crate::island) fn interacting_with_top_panel(&self) -> bool {
+        let Some(panel) = &self.top_panel else { return false };
+        let mut cursor = windows::Win32::Foundation::POINT::default();
+        if unsafe { GetCursorPos(&mut cursor) }.is_err() {
+            return false;
+        }
+        let (x, y, w, h) = self.pill_screen(true);
+        panel.interacting_at((x, y, x + w, y + h), (cursor.x as f32, cursor.y as f32))
+    }
+
     pub(in crate::island) fn configure_top_panel(&mut self) {
         if !self.settings.top_panel.enabled || !self.settings.top_panel.has_blocks() {
             self.top_panel.take();
@@ -38,10 +48,12 @@ impl App {
             return;
         }
         let suppressed = self.top_panel.as_ref().is_some_and(|panel| panel.suppressed());
+        let animating = self.top_panel.as_ref().is_some_and(|panel| panel.animating())
+            || self.open_motion.as_ref().is_some_and(|motion| motion.progress.active(Instant::now()));
         let mut snapshot = self.top_panel_data.clone();
-        if !suppressed && (force || self.top_panel_poll.elapsed() >= Duration::from_secs(1)) {
+        if !suppressed && !animating && (force || self.top_panel_poll.elapsed() >= Duration::from_secs(1)) {
             self.top_panel_poll = Instant::now();
-            let windows = desktop::windows();
+            let windows = desktop::cached_windows();
             snapshot.active = windows.iter().find(|w| w.active).cloned();
             snapshot.windows = snapshot
                 .active
@@ -66,12 +78,25 @@ impl App {
         }
         snapshot.radios = self.ui.radios;
         self.top_panel_data = snapshot.clone();
-        let (x, y, w, h) = self.pill_screen(matches!(self.state, State::Expanded | State::Collapsing));
+        let (x, y, w, h) = self.pill_screen(self.state == State::Expanded);
         let mut occupied = (x, y, x + w, y + h);
+        let mut motion = self.open_motion.as_ref().map(|motion| {
+            let bounds = |expanded| {
+                let (x, y, w, h) = self.pill_screen(expanded);
+                (x, y, x + w, y + h)
+            };
+            crate::ui::top_panel::IslandMotion {
+                progress: motion.progress.clone(),
+                closed: bounds(false),
+                opened: bounds(true),
+            }
+        });
         if let Some((nx, ny, nw, nh)) = self.notification_occupied_rect() {
             occupied = (occupied.0.min(nx), occupied.1.min(ny), occupied.2.max(nx + nw), occupied.3.max(ny + nh));
+            motion = None;
         }
         if let Some(panel) = &mut self.top_panel {
+            panel.sync_island_motion(motion);
             panel.set_ghost(
                 if self.ghosted { self.settings.ghost_opacity } else { 1.0 },
                 self.ghosted && self.settings.ghost_click_through,
@@ -251,7 +276,7 @@ mod tests {
         assert_eq!(app.island_work_area().1, top);
         assert_eq!(app.pill_screen(false).1, top + 8.0);
         let notification =
-            crate::ui::notification_card::card_target(app.pill_screen(false), app.island_work_area(), None, 1.0);
+            crate::ui::notification_card::card_target(app.pill_screen(false), app.island_work_area(), None, 1.0, None);
         assert_eq!(notification.1, top + 8.0);
         app.settings.placement = Placement::Docked;
         app.settings.dock_edge = Edge::Top;

@@ -214,7 +214,7 @@ pub fn show(owner: HWND, gpu: &Gpu, pin: &Pin, picker: fn(HWND) -> Option<String
             CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY,
             0,
-            w!("Segoe UI"),
+            crate::ui::fonts::native_family(),
         );
         let build = (|| -> Result<()> {
             for (i, value) in [&pin.name, &pin.target, &pin.icon].into_iter().enumerate() {

@@ -214,7 +214,7 @@ fn each_session(source: &str, mut f: impl FnMut(&windows::Win32::Media::Audio::I
             let path = String::from_utf16_lossy(&buf[..len as usize]);
             let stem =
                 std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
-            if session_matches(source, &stem, pid, std::process::id())
+            if session_matches(source, &stem)
                 && let Ok(volume) = control.cast::<ISimpleAudioVolume>()
             {
                 f(&volume);
@@ -225,15 +225,14 @@ fn each_session(source: &str, mut f: impl FnMut(&windows::Win32::Media::Audio::I
     found
 }
 
-fn session_matches(source: &str, stem: &str, pid: u32, own_pid: u32) -> bool {
-    if source == "Night Island · Yandex Music" {
-        pid == own_pid
-    } else {
-        !source.is_empty() && stem.eq_ignore_ascii_case(source)
-    }
+fn session_matches(source: &str, stem: &str) -> bool {
+    !source.is_empty() && stem.eq_ignore_ascii_case(source)
 }
 
 pub fn app_volume(source: &str) -> Option<f32> {
+    if source == crate::services::yandex::SOURCE {
+        return crate::services::yandex::volume();
+    }
     let mut level = None;
     each_session(source, |v| {
         if level.is_none() {
@@ -244,6 +243,9 @@ pub fn app_volume(source: &str) -> Option<f32> {
 }
 
 pub fn set_app_volume(source: &str, level: f32) -> bool {
+    if source == crate::services::yandex::SOURCE {
+        return crate::services::yandex::set_volume(level);
+    }
     each_session(source, |v| unsafe {
         let _ = v.SetMasterVolume(level.clamp(0.0, 1.0), std::ptr::null());
         let _ = v.SetMute(false, std::ptr::null());
@@ -289,10 +291,9 @@ mod source_tests {
 
     #[test]
     fn wave_volume_targets_only_this_island_process() {
-        assert!(session_matches("Night Island · Yandex Music", "night-island", 42, 42));
-        assert!(!session_matches("Night Island · Yandex Music", "night-island", 43, 42));
-        assert!(session_matches("CHROME", "chrome", 43, 42));
-        assert!(!session_matches("CHROME", "night-island", 42, 42));
-        assert!(!session_matches("", "", 43, 42));
+        assert!(!session_matches(crate::services::yandex::SOURCE, "night-island"));
+        assert!(session_matches("CHROME", "chrome"));
+        assert!(!session_matches("CHROME", "night-island"));
+        assert!(!session_matches("", ""));
     }
 }

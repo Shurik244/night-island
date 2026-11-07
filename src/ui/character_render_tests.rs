@@ -104,6 +104,48 @@ fn moving_pets_and_custom_ears_fit_the_attached_canvas() -> Result<()> {
     assert!(clipped.is_empty(), "{}", clipped.join("; "));
     if let Some(dir) = std::env::var_os("NI_COMPANION_PREVIEW") {
         save_behavior_preview(&gpu, &std::path::PathBuf::from(&dir))?;
+        let gallery = PopupSurface::new((720, 150))?;
+        gallery.paint(&gpu, |p| {
+            p.fill_rect((0.0, 0.0, 720.0, 150.0), rgba(0.06, 0.06, 0.07, 1.0))?;
+            for (index, body) in PetBody::ALL.into_iter().enumerate() {
+                let design =
+                    PetDesign { body, tail: matches!(body, PetBody::Cat | PetBody::Fox), ..Default::default() };
+                let pose = Pose {
+                    t: 1.0,
+                    look: (0.1, 0.0),
+                    reaction: Reaction::Idle,
+                    blink: false,
+                    beat: 0.0,
+                    accent: (0.6, 0.7, 1.0),
+                    motion: Default::default(),
+                };
+                let old = p.push_offset(index as f32 * 120.0, 12.0);
+                let drawn = draw_with_design(p, Character::Custom, 120.0, &pose, Some(&design));
+                p.set_transform(&old);
+                drawn?;
+                p.text(
+                    body.name(),
+                    (index as f32 * 120.0 + 30.0, 112.0, index as f32 * 120.0 + 115.0, 140.0),
+                    13.0,
+                    windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
+                    windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_ALIGNMENT_LEADING,
+                    rgba(1.0, 1.0, 1.0, 0.8),
+                )?;
+            }
+            Ok(())
+        })?;
+        let mut pixels = gallery.pixels();
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        let mut encoder = png::Encoder::new(
+            std::fs::File::create(std::path::PathBuf::from(&dir).join("custom-bodies.png")).unwrap(),
+            720,
+            150,
+        );
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
         let folder = std::path::PathBuf::from(dir).join("animation");
         std::fs::create_dir_all(&folder).unwrap();
         let frame_surface = PopupSurface::new((600, 154))?;

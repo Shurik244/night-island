@@ -192,7 +192,11 @@ pub(in crate::view) fn paint_history_in(p: &Painter, view: Rect, scale: f32, h: 
         geom.borrow_mut().clear();
     }
     let running_h = if running { 24.0 * scale } else { 0.0 };
-    let key = (h.id.clone(), width.round() as i32, h.msgs.len());
+    let key = (
+        format!("{:?}:{}:{}", crate::ui::fonts::selected(), crate::ui::fonts::revision(), h.id),
+        width.round() as i32,
+        h.msgs.len(),
+    );
     let mut cache = h.cache.borrow_mut();
     if (cache.0.clone(), cache.1, cache.2) != key {
         let heights = h

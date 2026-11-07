@@ -132,7 +132,9 @@ fn show_header_menu(hwnd: HWND) {
             }
             Some(103) => {}
             Some(100) => {
-                if let Some(group) = view::tab_settings_group(a.ui.tab) {
+                if matches!(a.ui.tab, view::Tab::Chat | view::Tab::Ai) {
+                    a.open_ai_settings();
+                } else if let Some(group) = view::tab_settings_group(a.ui.tab) {
                     a.open_settings_at(group);
                 }
             }
@@ -161,6 +163,28 @@ pub(in crate::island) fn point_from(lparam: LPARAM) -> (i32, i32) {
 
 pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
+        crate::ui::fonts::WM_FONT_PICK => {
+            let mut owner = hwnd;
+            with_app(|a| {
+                owner = a.settings_win.unwrap_or(hwnd);
+                a.popup_open = true;
+            });
+            let file = pick_font(owner);
+            with_app(|a| {
+                a.popup_open = false;
+                if let Some(file) = file {
+                    a.ui.sw.font_busy = true;
+                    a.ui.sw.font_status.clear();
+                    crate::ui::fonts::import_async(file, hwnd);
+                }
+                a.render_settings_win();
+            });
+            LRESULT(0)
+        }
+        crate::ui::fonts::WM_FONT_READY => {
+            with_app(|a| a.finish_font_import());
+            LRESULT(0)
+        }
         crate::platform::notifications::WM_NOTIFICATION_OPENED => {
             with_app(|a| {
                 if wparam.0 != 0 {
@@ -175,7 +199,20 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
             let (x, y) = point_from(lparam);
             let mut through = false;
             with_app(|a| {
-                if a.state == State::Collapsed && a.liquid_on() && !a.character_interacting() && !a.pill_motion_busy() {
+                if a.open_motion.is_some() {
+                    let mut rect = windows::Win32::Foundation::RECT::default();
+                    if unsafe { GetWindowRect(hwnd, &mut rect).is_ok() }
+                        && let Some(hit) = a.transition_hit(x - rect.left, y - rect.top)
+                    {
+                        through = !hit;
+                        return;
+                    }
+                }
+                if a.state == State::Collapsed
+                    && (a.liquid_on() || a.pill_motion.width.is_some())
+                    && !a.character_interacting()
+                    && (!a.pill_motion_busy() || a.pill_motion.width.is_some())
+                {
                     let mut rect = windows::Win32::Foundation::RECT::default();
                     if unsafe { GetWindowRect(hwnd, &mut rect).is_ok() } {
                         through = !a.on_interactive_body(x - rect.left, y - rect.top);
@@ -231,6 +268,12 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
                 a.finish_tile_press();
                 a.pointer.selecting = false;
                 a.pointer.reading = false;
+                if a.pointer.vol_drag && a.ui.tab == view::Tab::Yandex {
+                    a.drag_volume(point_from(lparam).0);
+                    unsafe {
+                        let _ = windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
+                    }
+                }
                 a.pointer.vol_drag = false;
                 a.finish_note_drag();
                 a.mouse_up();
@@ -242,6 +285,7 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
         }
         WM_CAPTURECHANGED => {
             with_app(|a| {
+                a.pointer.vol_drag = false;
                 if a.ui.pressed_action.take().is_some() {
                     a.repaint_expanded();
                 }
@@ -460,6 +504,10 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
             });
             LRESULT(0)
         }
+        crate::platform::memory_tools::WM_MEMORY_TOOLS => {
+            with_app(|a| a.on_memory_tools());
+            LRESULT(0)
+        }
         metrics::WM_METRICS => {
             with_app(|a| a.on_metrics());
             LRESULT(0)
@@ -477,7 +525,9 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
             LRESULT(0)
         }
         crate::platform::speech::WM_SPOKEN => {
-            with_app(|a| a.on_spoken());
+            if crate::platform::speech::current(wparam.0 as u32) {
+                with_app(|a| a.on_spoken());
+            }
             LRESULT(0)
         }
         wake::WM_WAKE => {
@@ -642,7 +692,10 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
         }
         m if m != 0 && m == TASKBAR_CREATED.load(Ordering::Relaxed) => {
             tray::add(hwnd);
-            with_app(|a| a.top_panel_request(4));
+            with_app(|a| {
+                a.configure_taskbar_replacement();
+                a.top_panel_request(4);
+            });
             LRESULT(0)
         }
         WM_DPICHANGED => {
@@ -728,6 +781,14 @@ pub(in crate::island) fn dock_popup(_hwnd: HWND, exists: bool) -> Option<usize> 
 }
 
 pub(in crate::island) fn pick_file(owner: HWND) -> Option<String> {
+    pick_file_filtered(owner, false)
+}
+
+fn pick_font(owner: HWND) -> Option<String> {
+    pick_file_filtered(owner, true)
+}
+
+fn pick_file_filtered(owner: HWND, font: bool) -> Option<String> {
     use windows::Win32::Foundation::{ERROR_CANCELLED, RPC_E_CHANGED_MODE};
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize,
@@ -745,6 +806,14 @@ pub(in crate::island) fn pick_file(owner: HWND) -> Option<String> {
         let helper = focus_owner();
         let result = (|| {
             let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+            if font {
+                dialog
+                    .SetFileTypes(&[windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC {
+                        pszName: w!("Fonts (*.ttf, *.otf, *.ttc)"),
+                        pszSpec: w!("*.ttf;*.otf;*.ttc"),
+                    }])
+                    .ok()?;
+            }
             let options = dialog.GetOptions().ok()?;
             dialog
                 .SetOptions(options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR)

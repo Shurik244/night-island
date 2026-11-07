@@ -1,5 +1,28 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VoicePhase {
+    #[default]
+    Idle,
+    Recording,
+    Transcribing,
+    Command,
+}
+
+impl VoicePhase {
+    pub fn cue(self) -> SpeechCue {
+        match self {
+            Self::Idle => SpeechCue::Quiet,
+            Self::Recording => SpeechCue::Listening,
+            Self::Transcribing | Self::Command => SpeechCue::Thinking,
+        }
+    }
+
+    pub fn pending(self) -> bool {
+        matches!(self, Self::Transcribing | Self::Command)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum SpeechCue {
@@ -45,6 +68,18 @@ impl PetSpeech {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn voice_phases_distinguish_the_microphone_from_requests_and_never_fake_speech() {
+        for phase in
+            [VoicePhase::Idle, VoicePhase::Recording, VoicePhase::Transcribing, VoicePhase::Command, VoicePhase::Idle]
+        {
+            assert_eq!(phase.cue().engaged(), phase != VoicePhase::Idle);
+            assert_eq!(phase.pending(), matches!(phase, VoicePhase::Transcribing | VoicePhase::Command));
+            assert_eq!(phase.cue() == SpeechCue::Listening, phase == VoicePhase::Recording);
+            assert!(!matches!(phase.cue(), SpeechCue::Speaking { .. }));
+        }
+    }
 
     #[test]
     fn speech_envelopes_are_bounded_stop_cleanly_and_honor_reduced_motion() {

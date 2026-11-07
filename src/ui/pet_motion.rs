@@ -45,7 +45,7 @@ impl PetPerformance {
                 } else if active {
                     30
                 } else if detached {
-                    24
+                    12
                 } else {
                     15
                 }
@@ -56,7 +56,7 @@ impl PetPerformance {
                 } else if active {
                     60
                 } else if detached {
-                    30
+                    18
                 } else {
                     20
                 }
@@ -87,9 +87,39 @@ pub struct PetMotion {
     greeting: f32,
     stroke: f32,
     previous_look: (f32, f32),
+    interest: f32,
+    interest_look: (f32, f32),
 }
 
 impl PetMotion {
+    pub fn interest_gaze(
+        &mut self,
+        normal: (f32, f32),
+        target: Option<(f32, f32)>,
+        dt: f32,
+        still: bool,
+    ) -> ((f32, f32), f32) {
+        let blend = 1.0 - (-dt.clamp(0.0, 0.25) * 10.0).exp();
+        if let Some(target) = target {
+            self.interest_look.0 += (target.0.clamp(-0.85, 0.85) - self.interest_look.0) * blend;
+            self.interest_look.1 += (target.1.clamp(-0.85, 0.85) - self.interest_look.1) * blend;
+        }
+        self.interest += (f32::from(target.is_some() && !still) - self.interest) * blend;
+        if self.interest < 0.002 {
+            self.interest = 0.0;
+        }
+        if still {
+            self.interest = 0.0;
+        }
+        (
+            (
+                normal.0 + (self.interest_look.0 - normal.0) * self.interest,
+                normal.1 + (self.interest_look.1 - normal.1) * self.interest,
+            ),
+            self.interest,
+        )
+    }
+
     pub fn advance(&mut self, target: (f32, f32), dt: f32, near: bool, held: bool, still: bool) -> Motion {
         let dt = dt.clamp(0.0, 0.25);
         let smoothing = 1.0 - (-dt * 16.0).exp();
@@ -149,6 +179,30 @@ pub fn eyelid(remaining: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interest_enters_and_leaves_smoothly_without_a_pointer_greeting() {
+        for fps in [15, 20, 30, 60, 144] {
+            let mut pet = PetMotion::default();
+            let dt = 1.0 / fps as f32;
+            let mut previous = 0.0;
+            for _ in 0..fps {
+                let (gaze, weight) = pet.interest_gaze((0.0, 0.0), Some((2.0, 0.0)), dt, false);
+                assert!(weight >= previous && gaze.0 <= 0.85);
+                pet.advance(gaze, dt, false, false, false);
+                assert_eq!(pet.greeting, 0.0);
+                previous = weight;
+            }
+            assert!(previous > 0.99);
+            let (gaze, weight) = pet.interest_gaze((0.0, 0.0), None, dt, false);
+            assert!(weight > 0.4 && weight < previous && gaze.0 > 0.0);
+            for _ in 0..fps {
+                pet.interest_gaze((0.0, 0.0), None, dt, false);
+            }
+            assert_eq!(pet.interest, 0.0);
+            assert_eq!(pet.interest_gaze((0.0, 0.0), Some((1.0, 0.0)), dt, true), ((0.0, 0.0), 0.0));
+        }
+    }
 
     #[test]
     fn pointer_tracking_continues_beyond_the_old_radius_and_across_monitors() {

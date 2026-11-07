@@ -280,6 +280,33 @@ impl EqStyle {
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "lowercase")]
+pub enum EqResponse {
+    Calm,
+    #[default]
+    Responsive,
+    Energetic,
+}
+
+impl EqResponse {
+    pub const ALL: [Self; 3] = [Self::Calm, Self::Responsive, Self::Energetic];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Calm => "Calm",
+            Self::Responsive => "Responsive",
+            Self::Energetic => "Energetic",
+        }
+    }
+
+    pub fn step(self, forward: bool) -> Self {
+        let count = Self::ALL.len();
+        let index = Self::ALL.iter().position(|value| *value == self).unwrap_or(0);
+        Self::ALL[if forward { (index + 1) % count } else { (index + count - 1) % count }]
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum EqGradient {
     #[default]
     Single,
@@ -360,12 +387,48 @@ impl ProgressStyle {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InterfaceFont {
+    #[default]
+    Segoe,
+    Montserrat,
+    SanFrancisco,
+    Custom,
+}
+
+impl InterfaceFont {
+    pub const ALL: [Self; 4] = [Self::Segoe, Self::Montserrat, Self::SanFrancisco, Self::Custom];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Custom => "Custom font",
+            Self::Segoe => "Segoe UI",
+            Self::Montserrat => "Montserrat",
+            Self::SanFrancisco if crate::ui::fonts::sf_available() => "SF Pro",
+            Self::SanFrancisco => "SF Pro (not installed)",
+        }
+    }
+
+    pub fn step(self, forward: bool) -> Self {
+        let index = Self::ALL.iter().position(|font| *font == self).unwrap_or(0);
+        Self::ALL[(index + if forward { 1 } else { Self::ALL.len() - 1 }) % Self::ALL.len()]
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Settings {
+    pub interface_font: InterfaceFont,
+    pub interface_font_file: String,
+    pub tour_revision: u8,
     pub top_panel: crate::data::top_panel::TopPanelSettings,
     pub desktop_dock: crate::data::desktop_dock::DockSettings,
     pub language: Language,
+    pub legacy_icons: bool,
+    pub header_icons: bool,
+    pub header_icon_colors: bool,
+    pub header_active_accent: bool,
     pub weather: bool,
     pub weather_city: String,
     pub weather_lat: Option<f64>,
@@ -386,8 +449,18 @@ pub struct Settings {
     pub dock_offset: f32,
     pub float_pos: Option<[i32; 2]>,
     pub system_notifications: bool,
+    pub wave_ratings: bool,
+    pub wave_search: bool,
     pub notification_tiles: u8,
     pub notification_open_app: bool,
+    pub ai_notification_cards: bool,
+    pub ai_compact_replies: bool,
+    pub notification_adaptive_size: bool,
+    pub pet_notifications: bool,
+    pub music_track_intro: bool,
+    pub pet_music_curiosity: bool,
+    pub pet_return_animation: bool,
+    pub liquid_idle_travel: bool,
     pub pill_weather: bool,
     pub pill_weather_side: WeatherSide,
     pub pill_battery: BatteryStyle,
@@ -398,15 +471,21 @@ pub struct Settings {
     pub metrics_tab: Vec<String>,
     pub metrics_pill: Vec<String>,
     pub metrics_secs: u32,
+    pub memory_tools: bool,
+    pub memory_watch: bool,
+    pub memory_excluded: Vec<String>,
     pub activity_track: bool,
     pub activity_ai: bool,
     pub vpn_pill: bool,
     pub voice_paste: bool,
     pub music_lyrics: bool,
     pub music_progress: bool,
+    pub pill_unified_layout: bool,
+    pub eq_smooth: bool,
     pub cover_mode: CoverMode,
     pub frame_rate: FrameRate,
     pub eq_style: EqStyle,
+    pub eq_response: EqResponse,
     pub eq_strength: f32,
     pub eq_gradient: EqGradient,
     pub eq_when_open: bool,
@@ -428,6 +507,8 @@ pub struct Settings {
     pub record_mic: bool,
     pub character: Character,
     pub pet_performance: crate::ui::pet_motion::PetPerformance,
+    pub pet_voice_reactions: bool,
+    pub pet_voice_input: bool,
     pub pet_autonomy: bool,
     pub custom_pet: crate::ui::pet_design::PetDesign,
     #[serde(alias = "spark_detached")]
@@ -450,6 +531,7 @@ pub struct Settings {
     pub open_delay_ms: u32,
     pub close_delay_ms: u32,
     pub open_speed: f32,
+    pub island_animations: bool,
     pub close_speed: f32,
     pub tab_anim: TabAnim,
     pub tab_order: Vec<String>,
@@ -473,9 +555,16 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            tour_revision: 0,
             top_panel: Default::default(),
             desktop_dock: Default::default(),
             language: Language::Ru,
+            legacy_icons: false,
+            header_icons: true,
+            header_icon_colors: false,
+            header_active_accent: true,
+            interface_font: InterfaceFont::Segoe,
+            interface_font_file: String::new(),
             weather: true,
             weather_city: String::new(),
             weather_lat: None,
@@ -496,8 +585,18 @@ impl Default for Settings {
             dock_offset: 0.5,
             float_pos: None,
             system_notifications: false,
+            wave_ratings: true,
+            wave_search: true,
             notification_tiles: 4,
             notification_open_app: false,
+            ai_notification_cards: true,
+            ai_compact_replies: true,
+            notification_adaptive_size: true,
+            pet_notifications: true,
+            music_track_intro: true,
+            pet_music_curiosity: true,
+            pet_return_animation: true,
+            liquid_idle_travel: true,
             pill_weather: true,
             pill_weather_side: WeatherSide::Left,
             pill_battery: BatteryStyle::Percent,
@@ -506,17 +605,25 @@ impl Default for Settings {
             music_cover: true,
             prefer_playing_media: false,
             voice_paste: true,
+            pet_voice_reactions: true,
+            pet_voice_input: true,
             activity_track: true,
             activity_ai: false,
             vpn_pill: true,
             metrics_tab: ["cpu", "ram", "net_down", "net_up", "gpu", "disk", "uptime"].map(String::from).to_vec(),
             metrics_pill: Vec::new(),
             metrics_secs: 2,
+            memory_tools: true,
+            memory_watch: true,
+            memory_excluded: Vec::new(),
             music_lyrics: true,
             music_progress: true,
+            pill_unified_layout: true,
+            eq_smooth: true,
             cover_mode: CoverMode::Fit,
             frame_rate: FrameRate::Adaptive,
             eq_style: EqStyle::Bars,
+            eq_response: EqResponse::Responsive,
             eq_strength: 1.5,
             eq_gradient: EqGradient::Horizontal,
             eq_when_open: true,
@@ -558,6 +665,7 @@ impl Default for Settings {
             open_delay_ms: 50,
             close_delay_ms: 50,
             open_speed: 1.0,
+            island_animations: true,
             tab_anim: TabAnim::Zoom,
             tab_order: Vec::new(),
             header_tabs: DEFAULT_HEADER_TABS.map(String::from).to_vec(),
@@ -934,8 +1042,24 @@ impl Settings {
         Some(dir.join("settings.json"))
     }
 
+    const TOUR_REVISION: u8 = 4;
+
+    pub fn tour_pending(&self) -> bool {
+        self.tour_revision < Self::TOUR_REVISION
+    }
+
+    pub fn dismiss_tour(&mut self) {
+        self.tour_revision = self.tour_revision.max(Self::TOUR_REVISION);
+    }
+
     pub fn load() -> Self {
-        let file = Self::path().and_then(|p| fs::File::open(p).ok());
+        Self::load_from(Self::path())
+    }
+
+    fn load_from(path: Option<PathBuf>) -> Self {
+        let file = path.map(fs::File::open);
+        let fresh = file.as_ref().is_some_and(|f| f.as_ref().is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound));
+        let file = file.and_then(Result::ok);
         let existed = file.is_some();
         let parsed = file.and_then(|f| {
             let mut buf = String::new();
@@ -945,13 +1069,20 @@ impl Settings {
         if existed && parsed.is_none() {
             crate::log_warn!("settings.json is unreadable, using defaults");
         }
-        let mut s = parsed.unwrap_or_default();
+        let mut s = parsed.unwrap_or_else(|| {
+            let mut defaults = Self::default();
+            if !fresh {
+                defaults.dismiss_tour();
+            }
+            defaults
+        });
         s.sanitize();
         s
     }
 
     pub fn sanitize(&mut self) {
         self.desktop_dock.sanitize();
+        self.top_panel.sanitize();
         let d = Settings::default();
         self.scale_percent = self.scale_percent.clamp(80, 200);
         if ![1, 2, 4].contains(&self.notification_tiles) {
@@ -1033,6 +1164,15 @@ impl Settings {
         self.hide_pill_secs = self.hide_pill_secs.clamp(5, 10);
         self.ghost_opacity = clamp_f(self.ghost_opacity, 0.05, 1.0, d.ghost_opacity);
         self.metrics_secs = self.metrics_secs.clamp(1, 10);
+        self.memory_excluded = self
+            .memory_excluded
+            .iter()
+            .take(128)
+            .filter(|path| path.len() <= 2048 && !path.contains(['\0', '\r', '\n']))
+            .map(|path| crate::data::desktop_dock::key(path))
+            .collect();
+        self.memory_excluded.sort();
+        self.memory_excluded.dedup();
         for list in [&mut self.metrics_tab, &mut self.metrics_pill] {
             let mut seen: Vec<String> = Vec::new();
             for key in std::mem::take(list) {
@@ -1061,6 +1201,9 @@ impl Settings {
     }
 
     pub fn save(&self) {
+        if cfg!(test) {
+            return;
+        }
         let Some(path) = Self::path() else { return };
         let Some(dir) = path.parent() else { return };
         if fs::create_dir_all(dir).is_err() {
@@ -1077,6 +1220,24 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_current_tour_opens_for_new_and_existing_profiles_once() {
+        let path = std::env::temp_dir().join(format!("ni-tour-settings-{}.json", std::process::id()));
+        assert!(Settings::load_from(Some(path.clone())).tour_pending());
+        fs::write(&path, r#"{"scale_percent":120,"tour_revision":2}"#).unwrap();
+        let mut settings = Settings::load_from(Some(path.clone()));
+        assert!(settings.tour_pending());
+        assert_eq!(settings.scale_percent, 120);
+        settings.dismiss_tour();
+        fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
+        let settings = Settings::load_from(Some(path.clone()));
+        assert!(!settings.tour_pending());
+        assert_eq!(settings.scale_percent, 120);
+        fs::write(&path, "invalid").unwrap();
+        assert!(!Settings::load_from(Some(path.clone())).tour_pending());
+        fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn older_settings_keep_spark_and_custom_pets_survive_restarts() {
@@ -1098,6 +1259,23 @@ mod tests {
             assert!(!restored.pet_autonomy);
             assert_eq!(restored.custom_pet, settings.custom_pet);
             assert_eq!(restored.custom_pet.ear_size, 1.25);
+        }
+    }
+
+    #[test]
+    fn equalizer_response_migrates_without_replacing_existing_preferences() {
+        let mut settings: Settings =
+            serde_json::from_str(r#"{"eq_style":"bars","eq_strength":1.0,"bump_tint":"progress","eq_smooth":true}"#)
+                .unwrap();
+        assert_eq!(settings.eq_response, EqResponse::Responsive);
+        for response in EqResponse::ALL {
+            settings.eq_response = response;
+            let restored: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored.eq_response, response);
+            assert_eq!(restored.eq_style, EqStyle::Bars);
+            assert_eq!(restored.eq_strength, 1.0);
+            assert_eq!(restored.bump_tint, BumpTint::Progress);
+            assert!(restored.eq_smooth);
         }
     }
 

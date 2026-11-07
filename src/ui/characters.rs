@@ -166,6 +166,42 @@ pub fn draw(p: &Painter, character: Character, w: f32, pose: &Pose) -> Result<()
     draw_with_design(p, character, w, pose, None)
 }
 
+pub fn draw_attached(
+    p: &Painter,
+    character: Character,
+    w: f32,
+    pose: &Pose,
+    design: Option<&super::pet_design::PetDesign>,
+) -> Result<()> {
+    let mut rest = *pose;
+    rest.t = 0.0;
+    rest.beat = 0.0;
+    rest.look = (0.0, 0.0);
+    rest.reaction = Reaction::Idle;
+    rest.motion = Default::default();
+    let (left, top, right, bottom) = match character {
+        Character::Spark => (10.8, 5.8, 29.2, 24.2),
+        Character::Blob => (9.0, 7.8, 31.0, 26.2),
+        Character::Eyes => (9.0, 7.0, 31.0, 23.0),
+        _ => drawing_bounds(character, &rest, design),
+    };
+    let k = (22.0 / (bottom - top)).min(28.0 / (right - left));
+    let scale = w / BOX_W;
+    let old = p.push_offset(0.0, 0.0);
+    p.set_transform(
+        &(windows_numerics::Matrix3x2 {
+            M11: k,
+            M22: k,
+            M31: (20.0 - (left + right) * 0.5 * k) * scale,
+            M32: (15.0 - (top + bottom) * 0.5 * k) * scale,
+            ..Default::default()
+        } * old),
+    );
+    let result = draw_with_design(p, character, w, pose, design);
+    p.set_transform(&old);
+    result
+}
+
 pub fn draw_with_design(
     p: &Painter,
     character: Character,
@@ -621,8 +657,23 @@ fn draw_designed(p: &Painter, s: f32, pose: &Pose, design: &super::pet_design::P
     let breathe = (pose.t * 1.65).sin();
     if design.tail {
         let wag = (pose.t * (3.5 + pose.motion.warmth * 3.0)).sin() * 1.2;
-        lit(p, s, (cx + width + 2.5, cy + 8.0 + wag, 3.5, 2.3), fur)?;
-        p.fill_ellipse((cx + width + 4.4) * s, (cy + 7.4 + wag) * s, 1.5 * s, 1.5 * s, c(belly, 1.0))?;
+        if design.body == PetBody::Cat {
+            p.bezier(
+                [
+                    ((cx + width * 0.45) * s, (cy + 10.0) * s),
+                    ((cx + width + 5.0) * s, (cy + 13.0) * s),
+                    ((cx + width + 5.0) * s, (cy + 3.0 + wag) * s),
+                    ((cx + width + 1.5) * s, (cy + 5.0 + wag) * s),
+                ],
+                2.1 * s,
+                c(fur, 1.0),
+            )?;
+        } else if design.body == PetBody::Rabbit {
+            lit(p, s, (cx + width * 0.95, cy + 9.2, 2.5, 2.5), belly)?;
+        } else {
+            lit(p, s, (cx + width + 2.5, cy + 8.0 + wag, 3.5, 2.3), fur)?;
+            p.fill_ellipse((cx + width + 4.4) * s, (cy + 7.4 + wag) * s, 1.5 * s, 1.5 * s, c(belly, 1.0))?;
+        }
     }
     for sign in [-1.0, 1.0] {
         let ex = cx + sign * width * 0.76;
@@ -676,13 +727,35 @@ fn draw_designed(p: &Painter, s: f32, pose: &Pose, design: &super::pet_design::P
             )?;
         }
     } else {
-        lit(p, s, (cx, cy + 7.3, width * 0.78, 6.8 + breathe * 0.12), fur)?;
-        lit(p, s, (cx, cy + 7.5, width * 0.48, 4.5), belly)?;
+        let (torso, chest, foot, arm) = match design.body {
+            PetBody::Cat => (0.56, 0.29, 2.3, 1.5),
+            PetBody::Fox => (0.62, 0.34, 2.4, 1.6),
+            PetBody::Rabbit => (0.82, 0.56, 3.7, 1.7),
+            PetBody::Robot => (0.62, 0.42, 2.6, 1.7),
+            _ => (0.78, 0.48, 3.0, 2.1),
+        };
+        if design.body == PetBody::Robot {
+            p.fill_round_gradient(
+                ((cx - width * torso) * s, (cy + 3.0) * s, (cx + width * torso) * s, (cy + 11.5) * s),
+                1.5 * s,
+                c(fur, 1.0),
+                c(mix(fur, DARK, 0.25), 1.0),
+            )?;
+            p.fill_round_rect(
+                ((cx - width * chest) * s, (cy + 6.3) * s, (cx + width * chest) * s, (cy + 9.6) * s),
+                0.8 * s,
+                c(belly, 1.0),
+            )?;
+            p.fill_ellipse(cx * s, (cy + 7.9) * s, 0.85 * s, 0.85 * s, c(accent, 1.0))?;
+        } else {
+            lit(p, s, (cx, cy + 7.3, width * torso, 6.8 + breathe * 0.12), fur)?;
+            lit(p, s, (cx, cy + 7.5, width * chest, if design.body == PetBody::Fox { 5.4 } else { 4.5 }), belly)?;
+        }
         for sign in [-1.0, 1.0] {
             let step = pose.motion.behavior.stride.sin() * pose.motion.behavior.walk * sign;
-            let foot_x = cx + sign * width * (0.58 + pose.motion.behavior.sit * 0.06) + step;
+            let foot_x = cx + sign * width * (torso * 0.74 + pose.motion.behavior.sit * 0.06) + step;
             let foot_y = cy + 12.0 + step * 1.5;
-            lit(p, s, (foot_x, foot_y, 3.0, 1.9), fur)?;
+            lit(p, s, (foot_x, foot_y, foot, if design.body == PetBody::Rabbit { 2.2 } else { 1.9 }), fur)?;
             p.fill_ellipse(foot_x * s, (foot_y + 0.3) * s, 1.45 * s, 0.7 * s, c(belly, 0.30))?;
             let paw = if pose.motion.behavior.walk > 0.0 {
                 -step * 1.1
@@ -691,7 +764,13 @@ fn draw_designed(p: &Painter, s: f32, pose: &Pose, design: &super::pet_design::P
             } else {
                 breathe * 0.15
             };
-            p.fill_ellipse((cx + sign * width * 0.84) * s, (cy + 6.0 + paw) * s, 2.1 * s, 3.1 * s, c(fur, 1.0))?;
+            p.fill_ellipse(
+                (cx + sign * width * (torso + 0.06)) * s,
+                (cy + 6.0 + paw) * s,
+                arm * s,
+                3.1 * s,
+                c(fur, 1.0),
+            )?;
         }
     }
     if design.body == PetBody::Robot {
@@ -701,8 +780,27 @@ fn draw_designed(p: &Painter, s: f32, pose: &Pose, design: &super::pet_design::P
             c(mix(fur, WHITE, 0.25), 1.0),
             c(mix(fur, DARK, 0.3), 1.0),
         )?;
+    } else if design.body == PetBody::Fox {
+        shape(
+            p,
+            s,
+            (cx, cy - 7.5),
+            &[
+                [(cx + width * 0.7, cy - 8.0), (cx + width * 1.05, cy - 2.0), (cx + width, cy)],
+                [(cx + width * 0.8, cy + 3.5), (cx + 3.0, cy + 7.2), (cx, cy + 7.2)],
+                [(cx - 3.0, cy + 7.2), (cx - width * 0.8, cy + 3.5), (cx - width, cy)],
+                [(cx - width * 1.05, cy - 2.0), (cx - width * 0.7, cy - 8.0), (cx, cy - 7.5)],
+            ],
+            fur,
+            1.0,
+        )?;
     } else {
-        lit(p, s, (cx, cy, width, 7.9), fur)?;
+        let (rx, ry) = match design.body {
+            PetBody::Cat => (width * 1.04, 7.2),
+            PetBody::Rabbit => (width * 0.88, 8.6),
+            _ => (width, 7.9),
+        };
+        lit(p, s, (cx, cy, rx, ry), fur)?;
     }
     match design.pattern {
         PetPattern::Patches => {
@@ -739,7 +837,20 @@ fn draw_designed(p: &Painter, s: f32, pose: &Pose, design: &super::pet_design::P
             )?;
         }
     } else if !matches!(design.body, PetBody::Ghost | PetBody::Robot) {
-        lit(p, s, (cx, cy + 3.5, 4.4, 2.85), belly)?;
+        let muzzle = if design.body == PetBody::Bear { (4.4, 2.85) } else { (3.1, 1.8) };
+        lit(p, s, (cx, cy + 3.5, muzzle.0, muzzle.1), belly)?;
+        if design.body == PetBody::Cat {
+            for sign in [-1.0, 1.0] {
+                for y in [1.5, 3.1] {
+                    p.line(
+                        ((cx + sign * 5.0) * s, (cy + y) * s),
+                        ((cx + sign * 9.0) * s, (cy + y - 0.6) * s),
+                        0.35 * s,
+                        c(eyes, 0.45),
+                    )?;
+                }
+            }
+        }
     }
     eye(p, s, pose, cx - 3.9, cy - 0.65, 1.35, 1.9, eyes)?;
     eye(p, s, pose, cx + 3.9, cy - 0.65, 1.35, 1.9, eyes)?;

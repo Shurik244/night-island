@@ -26,11 +26,9 @@ impl App {
     }
 
     pub(in crate::island) fn open_ai_settings(&mut self) {
-        self.open_settings_window();
-        if let Some(group) = view::GROUPS.iter().position(|g| g.name == "AI") {
-            self.ui.sw.group = group;
-            self.ui.sw.scroll = 0.0;
-            self.render_settings_win();
+        if let Some(group) = view::tab_settings_group(view::Tab::Chat) {
+            self.ui.sw.assistant_page = view::AssistantPage::Model;
+            self.open_settings_at(group);
         }
     }
 
@@ -286,9 +284,7 @@ impl App {
                 chat.turns.drain(..overflow);
                 chat.saved = chat.saved.saturating_sub(overflow);
                 if self.state != State::Expanded || self.ui.tab != view::Tab::Chat {
-                    let short: String =
-                        text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(70).collect();
-                    self.notify_for(Notice::Ai, '\u{E8F2}', &format!("AI: {short}"), 7000);
+                    self.notify_for(Notice::Ai, '\u{E8F2}', &text, 7000);
                 }
             }
             Err(why) => {

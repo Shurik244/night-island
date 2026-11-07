@@ -75,6 +75,33 @@ impl App {
         use view::Sid::*;
         if apply {
             match id {
+                LiquidIdleTravel => {
+                    self.stop_idle();
+                    self.start_liquid();
+                }
+                LegacyIcons => {
+                    crate::ui::icons::set_legacy(self.settings.legacy_icons);
+                    self.repaint_themed_surfaces();
+                    if let Some(dock) = &mut self.desktop_dock {
+                        dock.repaint_icons();
+                    }
+                }
+                MemoryTools if !self.settings.memory_tools => {
+                    self.close_memory_tools();
+                    crate::platform::memory_tools::send(
+                        self.hwnd,
+                        crate::platform::memory_tools::Command::Watch(false),
+                    );
+                }
+                InterfaceFont => {
+                    crate::ui::fonts::set(self.settings.interface_font);
+                    self.apply_layout();
+                    self.repaint_themed_surfaces();
+                    if let Some(dock) = &mut self.desktop_dock {
+                        dock.repaint_icons();
+                    }
+                    self.render_settings_win();
+                }
                 Placement | Size | Edge => self.apply_layout(),
                 Style => self.apply_style(),
                 Tint => {
@@ -84,7 +111,9 @@ impl App {
                 }
                 TopAutoHide | TopTray | TopEnabled | TopApplication | TopWifi | TopBluetooth | TopVolume
                 | TopBattery | TopFullscreen | TopReserve | TopClearControls | TopMicrophone | TopKeyboard
-                | TopWorkspaces | TopAnimations => self.configure_top_panel(),
+                | TopWorkspaces | TopAnimations | TopEntrance | TopGap | TopMotion | TopLiquid => {
+                    self.configure_top_panel()
+                }
                 DockExperimentalCapture
                 | DockReplaceTaskbar
                 | DockEnabled
@@ -95,6 +124,7 @@ impl App {
                 | DockEconomy
                 | DockAnimations
                 | DockSeparator
+                | DockShowAdd
                 | DockLockPins
                 | DockIconSize
                 | DockZoom
@@ -105,6 +135,18 @@ impl App {
                 | DockTintSaturation
                 | DockTintBrightness => self.configure_desktop_dock(),
                 SystemNotifications => self.configure_system_notifications(),
+                WaveRatings => {
+                    self.ui.yandex.ratings_hidden = !self.settings.wave_ratings;
+                    if self.ui.yandex.ratings_hidden {
+                        self.ui.yandex.show_library = false;
+                    }
+                }
+                WaveSearch => {
+                    self.ui.yandex.search_hidden = !self.settings.wave_search;
+                    if self.ui.yandex.search_hidden {
+                        self.close_wave_search();
+                    }
+                }
                 ActivityTrack => self.start_activity(),
                 ActivityAi => self.reload_groups(),
                 VpnPill => {
@@ -113,7 +155,26 @@ impl App {
                     self.repaint_collapsed();
                 }
                 MetricsInterval => self.sync_metrics(),
-                AsstEnabled | AsstWake => self.sync_wake(),
+                AsstEnabled | AsstWake => {
+                    if id == AsstEnabled && !self.settings.assistant.perms.enabled {
+                        self.cancel_voice_input();
+                    }
+                    self.sync_wake();
+                }
+                PetVoiceInput => {
+                    if !self.settings.pet_voice_input && self.pet.desktop.is_some() {
+                        self.cancel_voice_input();
+                    }
+                    if let Some(chat) = &mut self.pet.chat {
+                        chat.window.set_voice_enabled(self.settings.pet_voice_input);
+                    }
+                }
+                PetNotifications => {
+                    if !self.settings.pet_notifications && self.pet_notification_visible() {
+                        self.hide_notification_card();
+                    }
+                    self.maybe_show_notification();
+                }
                 AsstTtsProvider => self.sync_voice_fields(),
                 AutoHide => {
                     if self.settings.auto_hide {
@@ -142,7 +203,7 @@ impl App {
                     crate::ui::i18n::set_ru(self.settings.language == crate::data::settings::Language::Ru);
                     self.repaint_collapsed();
                 }
-                Character | CharacterDetached | PetPerformance | PetAutonomy => {
+                Character | CharacterDetached | PetPerformance | PetAutonomy | PetVoice => {
                     self.apply_character();
                     self.sync_pet_studio();
                 }
@@ -160,7 +221,7 @@ impl App {
                         lockkeys::stop();
                     }
                 }
-                EqStyle | Spikes => {
+                EqStyle | Spikes | EqSmooth => {
                     self.apply_layout();
                     self.refresh_eq_shape();
                 }
@@ -173,10 +234,16 @@ impl App {
                     self.stop_idle();
                     self.liquid_tick();
                 }
-                EqStrength | EqGradient => self.refresh_eq_shape(),
+                EqStrength | EqGradient | EqResponse => self.refresh_eq_shape(),
                 PreferPlayingMedia => {
                     media::configure_priority(self.settings.prefer_playing_media);
                     self.on_media();
+                }
+                PillUnifiedLayout => {
+                    self.pet.char_key = None;
+                    self.update_eq();
+                    self.repaint_collapsed();
+                    self.char_tick();
                 }
                 MusicEq | MusicTitle | MusicCover | CoverMode | MusicLyrics | MusicProgress | ProgressStyle
                 | PillWeather | PillWeatherSide | PillBattery | SpikeColor => {

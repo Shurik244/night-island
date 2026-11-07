@@ -13,6 +13,8 @@ use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUnini
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::Result;
 
+pub const LOCAL_APP_ID: &str = "night-island-local";
+
 pub const WM_NOTIFICATIONS: u32 = WM_APP + 55;
 pub const WM_NOTIFICATION_ACCESS: u32 = WM_APP + 56;
 
@@ -174,9 +176,17 @@ pub(super) fn text(value: &str, limit: usize) -> String {
 }
 
 fn app_icon(info: &windows::ApplicationModel::AppInfo) -> Option<Arc<super::apps::Icon>> {
-    let stream =
-        info.DisplayInfo().ok()?.GetLogo(Size { Width: 40.0, Height: 40.0 }).ok()?.OpenReadAsync().ok()?.join().ok()?;
-    super::notification_images::decode(&stream, 40)
+    let stream = info
+        .DisplayInfo()
+        .ok()?
+        .GetLogo(Size { Width: 128.0, Height: 128.0 })
+        .ok()?
+        .OpenReadAsync()
+        .ok()?
+        .join()
+        .ok()?;
+    let icon = super::notification_images::decode(&stream, 128)?;
+    Some(Arc::new(super::apps::normalize_dock_icon(super::apps::Icon { side: icon.side, bgra: icon.bgra.clone() })))
 }
 
 fn read_record(

@@ -10,6 +10,29 @@ pub struct LiquidBody {
     pub depth: f32,
 }
 
+fn audio_edge_depth(t: f32, levels: &[f32], style: EdgeShape) -> f32 {
+    if levels.is_empty() || !(0.0..=1.0).contains(&t) {
+        return 0.0;
+    }
+    let smooth = |v: f32| {
+        let v = v.clamp(0.0, 1.0);
+        v * v * v * (v * (v * 6.0 - 15.0) + 10.0)
+    };
+    let edge = smooth(t.min(1.0 - t) * 8.0);
+    let position = t * (levels.len() - 1) as f32;
+    let i = position.floor() as usize;
+    let a = levels[i].clamp(0.0, 1.0);
+    let b = levels[(i + 1).min(levels.len() - 1)].clamp(0.0, 1.0);
+    let level = a + (b - a) * smooth(position.fract());
+    let phase = (t * levels.len() as f32).fract();
+    let lobe = match style {
+        EdgeShape::Wave => 1.0,
+        EdgeShape::Spikes => 0.18 + 0.82 * (std::f32::consts::PI * phase).sin().powi(2),
+        EdgeShape::Bars => 0.14 + 0.86 * smooth(phase.min(1.0 - phase) * 4.0),
+    };
+    level * edge * lobe
+}
+
 impl Gpu {
     pub fn liquid_body(&self, body: &LiquidBody) -> Result<ID2D1PathGeometry> {
         liquid_body_geometry(&self.factory, body)
@@ -104,6 +127,18 @@ impl Outline {
 }
 
 impl ElasticPull {
+    pub fn bounded(self, rect: (f32, f32, f32, f32), radius: f32) -> Self {
+        let (x, y, w, h) = rect;
+        let support = if w >= h {
+            (self.point.0 - x).min(x + w - self.point.0)
+        } else {
+            (self.point.1 - y).min(y + h - self.point.1)
+        }
+        .max(0.0);
+        let limit = radius.min(w.min(h) * 0.5).max(0.0) * 0.7 + support * 0.35;
+        Self { depth: self.depth.clamp(0.0, limit), ..self }
+    }
+
     pub fn follow(self, target: Self, rect: (f32, f32, f32, f32), radius: f32, blend: f32) -> Self {
         let outline = Outline::new(rect, radius);
         let from = outline.position(self);
@@ -169,7 +204,26 @@ pub fn cursor_pull(
     if magnitude > 0.001 {
         normal = (normal.0 / magnitude, normal.1 / magnitude);
     }
-    ElasticPull { point, normal, spread: 44.0, depth }
+    ElasticPull { point, normal, spread: 44.0, depth }.bounded(rect, radius)
+}
+
+impl ElasticBody {
+    pub fn deform(&self, point: (f32, f32), outward: (f32, f32)) -> (f32, f32) {
+        let (px, py) = point;
+        let (_, _, w, h) = self.rect;
+        let delta = (px - self.pull.point.0, py - self.pull.point.1);
+        let tangent = delta.0 * -self.pull.normal.1 + delta.1 * self.pull.normal.0;
+        let normal = delta.0 * self.pull.normal.0 + delta.1 * self.pull.normal.1;
+        let fade = (1.0 + normal / w.min(h).clamp(1.0, 80.0)).clamp(0.0, 1.0);
+        let alignment = (outward.0 * self.pull.normal.0 + outward.1 * self.pull.normal.1).max(0.0);
+        let weight = (-3.0 * (tangent / self.pull.spread.max(1.0)).powi(2)).exp()
+            * fade
+            * fade
+            * (3.0 - 2.0 * fade)
+            * alignment
+            * alignment;
+        (px + self.pull.normal.0 * self.pull.depth * weight, py + self.pull.normal.1 * self.pull.depth * weight)
+    }
 }
 
 fn liquid_body_geometry(factory: &ID2D1Factory, body: &LiquidBody) -> Result<ID2D1PathGeometry> {
@@ -177,22 +231,21 @@ fn liquid_body_geometry(factory: &ID2D1Factory, body: &LiquidBody) -> Result<ID2
 }
 
 fn elastic_geometry(factory: &ID2D1Factory, body: &ElasticBody) -> Result<ID2D1PathGeometry> {
+    contour_geometry(factory, body, |point, _| point)
+}
+
+fn contour_geometry(
+    factory: &ID2D1Factory,
+    body: &ElasticBody,
+    deform: impl Fn((f32, f32), (f32, f32)) -> (f32, f32),
+) -> Result<ID2D1PathGeometry> {
     let outline = Outline::new(body.rect, body.radius);
-    let (_, _, w, h) = body.rect;
+    let steps = (outline.perimeter / 3.0).ceil().clamp(128.0, 512.0) as usize;
     let at = |t: f32| {
-        let ((px, py), outward) = outline.at(t);
-        let delta = (px - body.pull.point.0, py - body.pull.point.1);
-        let tangent = delta.0 * -body.pull.normal.1 + delta.1 * body.pull.normal.0;
-        let normal = delta.0 * body.pull.normal.0 + delta.1 * body.pull.normal.1;
-        let fade = (1.0 + normal / w.min(h).clamp(1.0, 80.0)).clamp(0.0, 1.0);
-        let alignment = (outward.0 * body.pull.normal.0 + outward.1 * body.pull.normal.1).max(0.0);
-        let weight = (-3.0 * (tangent / body.pull.spread.max(1.0)).powi(2)).exp()
-            * fade
-            * fade
-            * (3.0 - 2.0 * fade)
-            * alignment
-            * alignment;
-        (px + outward.0 * body.pull.depth * weight, py + outward.1 * body.pull.depth * weight)
+        let (point, outward) = outline.at(t);
+        let audio = deform(point, outward);
+        let pulled = body.deform(point, outward);
+        (audio.0 + pulled.0 - point.0, audio.1 + pulled.1 - point.1)
     };
     let tangent = |t: f32| {
         let a = at(t - 0.0001);
@@ -204,16 +257,16 @@ fn elastic_geometry(factory: &ID2D1Factory, body: &ElasticBody) -> Result<ID2D1P
         let geometry = factory.CreatePathGeometry()?;
         let sink = geometry.Open()?;
         sink.BeginFigure(vector(at(0.0)), D2D1_FIGURE_BEGIN_FILLED);
-        for i in 0..128 {
-            let t0 = i as f32 / 128.0;
-            let t1 = (i + 1) as f32 / 128.0;
+        for i in 0..steps {
+            let t0 = i as f32 / steps as f32;
+            let t1 = (i + 1) as f32 / steps as f32;
             let a = at(t0);
             let b = at(t1);
             let da = tangent(t0);
             let db = tangent(t1);
             sink.AddBezier(&D2D1_BEZIER_SEGMENT {
-                point1: vector((a.0 + da.0 / 384.0, a.1 + da.1 / 384.0)),
-                point2: vector((b.0 - db.0 / 384.0, b.1 - db.1 / 384.0)),
+                point1: vector((a.0 + da.0 / (steps * 3) as f32, a.1 + da.1 / (steps * 3) as f32)),
+                point2: vector((b.0 - db.0 / (steps * 3) as f32, b.1 - db.1 / (steps * 3) as f32)),
                 point3: vector(b),
             });
         }
@@ -224,10 +277,69 @@ fn elastic_geometry(factory: &ID2D1Factory, body: &ElasticBody) -> Result<ID2D1P
 }
 
 impl Gpu {
+    pub fn audio_body(
+        &self,
+        body: &ElasticBody,
+        edge: Hang,
+        levels: &[f32],
+        depth: f32,
+        style: EdgeShape,
+    ) -> Result<ID2D1PathGeometry> {
+        let (x, y, w, h) = body.rect;
+        let r = body.radius.min(w.min(h) / 2.0);
+        contour_geometry(&self.factory, body, |point, normal| {
+            let (along, length, facing) = match edge {
+                Hang::Down => (point.0 - x - r, w - 2.0 * r, normal.1),
+                Hang::Up => (x + w - r - point.0, w - 2.0 * r, -normal.1),
+                Hang::Right => (y + h - r - point.1, h - 2.0 * r, normal.0),
+                Hang::Left => (point.1 - y - r, h - 2.0 * r, -normal.0),
+            };
+            let pulled = body.deform(point, normal);
+            let pull_depth = (pulled.0 - point.0).hypot(pulled.1 - point.1);
+            let reach = 40.0 * (r / 16.0).max(1.0);
+            let amplitude = audio_edge_depth(along / length.max(1.0), levels, style)
+                * depth.min(reach)
+                * (1.0 - pull_depth / reach).max(0.0)
+                * facing.max(0.0).powi(4);
+            (point.0 + normal.0 * amplitude, point.1 + normal.1 * amplitude)
+        })
+    }
+
     pub fn elastic_body(&self, body: &ElasticBody) -> Result<ID2D1PathGeometry> {
         elastic_geometry(&self.factory, body)
     }
 
+    pub fn elastic_with_edge(
+        &self,
+        body: &ElasticBody,
+        edge: &ID2D1PathGeometry,
+        transform: &windows_numerics::Matrix3x2,
+    ) -> Result<ID2D1PathGeometry> {
+        unsafe {
+            let local_edge = self.factory.CreatePathGeometry()?;
+            let copy = local_edge.Open()?;
+            edge.Simplify(
+                windows::Win32::Graphics::Direct2D::D2D1_GEOMETRY_SIMPLIFICATION_OPTION_CUBICS_AND_LINES,
+                None,
+                0.1,
+                &copy,
+            )?;
+            copy.Close()?;
+            let geometry = self.factory.CreatePathGeometry()?;
+            let sink = geometry.Open()?;
+            self.elastic_body(body)?.CombineWithGeometry(
+                &local_edge,
+                windows::Win32::Graphics::Direct2D::D2D1_COMBINE_MODE_UNION,
+                Some(transform),
+                0.1,
+                &sink,
+            )?;
+            sink.Close()?;
+            Ok(geometry)
+        }
+    }
+
+    #[cfg(test)]
     pub fn outside_body(
         &self,
         size: (i32, i32),
@@ -253,31 +365,83 @@ impl Gpu {
 }
 
 impl Painter<'_> {
-    pub fn liquid_highlight(&self, size: (i32, i32), pull: &ElasticPull, color: D2D1_COLOR_F) -> Result<()> {
+    pub fn edge_highlight(
+        &self,
+        size: (i32, i32),
+        body: &ElasticBody,
+        palette: Palette,
+        tip: D2D1_COLOR_F,
+        opacity: f32,
+    ) -> Result<()> {
         use windows::Win32::Graphics::Direct2D::Common::D2D1_GRADIENT_STOP;
         use windows::Win32::Graphics::Direct2D::{
-            D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
+            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_EXTEND_MODE_CLAMP, D2D1_GAMMA_2_2, D2D1_LAYER_PARAMETERS,
+            D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
         };
-        let stops = [
-            D2D1_GRADIENT_STOP { position: 0.0, color: D2D1_COLOR_F { a: 0.0, ..color } },
-            D2D1_GRADIENT_STOP { position: 1.0, color: D2D1_COLOR_F { a: 0.2, ..color } },
-        ];
+        let pt = |x, y| windows_numerics::Vector2 { X: x, Y: y };
+        let horizontal = palette.tone == Tone::Horizontal;
+        let pull = &body.pull;
+        let blend = body.radius * 0.2;
+        let opacity = opacity.clamp(0.0, 1.0);
+        let stops = [(0.0, 0.0), (0.45, 0.32), (1.0, 0.68)].map(|(position, alpha)| D2D1_GRADIENT_STOP {
+            position,
+            color: match palette.tone {
+                Tone::Vertical => palette.at(position, alpha * opacity),
+                Tone::Horizontal => rgba(1.0, 1.0, 1.0, alpha * opacity),
+                Tone::Single => D2D1_COLOR_F { a: alpha * opacity, ..tip },
+            },
+        });
         unsafe {
-            let gradient = self.dc.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
-            let line = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
-                startPoint: windows_numerics::Vector2 { X: pull.point.0, Y: pull.point.1 },
-                endPoint: windows_numerics::Vector2 {
-                    X: pull.point.0 + pull.normal.0 * pull.depth.max(1.0),
-                    Y: pull.point.1 + pull.normal.1 * pull.depth.max(1.0),
+            let stops = self.dc.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+            let fade = self.dc.CreateLinearGradientBrush(
+                &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                    startPoint: pt(pull.point.0 - pull.normal.0 * blend, pull.point.1 - pull.normal.1 * blend),
+                    endPoint: pt(
+                        pull.point.0 + pull.normal.0 * pull.depth.max(1.0),
+                        pull.point.1 + pull.normal.1 * pull.depth.max(1.0),
+                    ),
                 },
-            };
-            let brush = self.dc.CreateLinearGradientBrush(&line, None, &gradient)?;
-            self.dc.FillRectangle(
-                &D2D_RECT_F { left: 0.0, top: 0.0, right: size.0 as f32, bottom: size.1 as f32 },
-                &brush,
-            );
-            Ok(())
+                None,
+                &stops,
+            )?;
+            let bounds = D2D_RECT_F { left: 0.0, top: 0.0, right: size.0 as f32, bottom: size.1 as f32 };
+            if horizontal {
+                let colors: Vec<_> = (0..=6)
+                    .map(|i| {
+                        let position = i as f32 / 6.0;
+                        D2D1_GRADIENT_STOP { position, color: palette.at(position, 1.0) }
+                    })
+                    .collect();
+                let colors = self.dc.CreateGradientStopCollection(&colors, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+                let brush = self.dc.CreateLinearGradientBrush(
+                    &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                        startPoint: pt(body.rect.0, body.rect.1),
+                        endPoint: if body.rect.2 >= body.rect.3 {
+                            pt(body.rect.0 + body.rect.2, body.rect.1)
+                        } else {
+                            pt(body.rect.0, body.rect.1 + body.rect.3)
+                        },
+                    },
+                    None,
+                    &colors,
+                )?;
+                let mut params = D2D1_LAYER_PARAMETERS {
+                    contentBounds: bounds,
+                    maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                    maskTransform: windows_numerics::Matrix3x2::identity(),
+                    opacity: 1.0,
+                    opacityBrush: std::mem::ManuallyDrop::new(Some(fade.cast()?)),
+                    ..Default::default()
+                };
+                self.dc.PushLayer(&params, None);
+                self.dc.FillRectangle(&bounds, &brush);
+                self.dc.PopLayer();
+                std::mem::ManuallyDrop::drop(&mut params.opacityBrush);
+            } else {
+                self.dc.FillRectangle(&bounds, &fade);
+            }
         }
+        Ok(())
     }
 }
 
@@ -318,6 +482,41 @@ mod tests {
                             }
                         }
                     }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn side_pulls_stay_within_the_pill_height_and_corners_remain_compact() -> Result<()> {
+        let factory: ID2D1Factory = unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
+        for scale in [0.75, 1.0, 1.25, 1.5, 2.0] {
+            for vertical in [false, true] {
+                let rect = if vertical {
+                    (80.0 * scale, 80.0 * scale, 34.0 * scale, 240.0 * scale)
+                } else {
+                    (80.0 * scale, 80.0 * scale, 240.0 * scale, 34.0 * scale)
+                };
+                let radius = 17.0 * scale;
+                for cursor in [(75.0, 97.0), (325.0, 97.0), (75.0, 119.0), (325.0, 119.0)] {
+                    let cursor = if vertical {
+                        (cursor.1 * scale, cursor.0 * scale)
+                    } else {
+                        (cursor.0 * scale, cursor.1 * scale)
+                    };
+                    let pull = cursor_pull(rect, radius, cursor, 160.0 * scale, 40.0 * scale, None);
+                    assert!(pull.depth > 0.0 && pull.depth <= 15.0 * scale);
+                    let shape = elastic_geometry(&factory, &ElasticBody { rect, radius, pull })?;
+                    let bounds = unsafe { shape.GetBounds(None)? };
+                    let (low, high, start, length, straight) = if vertical {
+                        (bounds.left, bounds.right, rect.0, rect.2, pull.normal.0.abs() < 0.001)
+                    } else {
+                        (bounds.top, bounds.bottom, rect.1, rect.3, pull.normal.1.abs() < 0.001)
+                    };
+                    let allowance = if straight { 0.05 * scale } else { 12.0 * scale };
+                    assert!(low >= start - allowance && high <= start + length + allowance);
+                    assert_eq!(unsafe { shape.GetFigureCount()? }, 1);
                 }
             }
         }
@@ -626,5 +825,26 @@ mod tests {
             encoder.write_header().unwrap().write_image_data(&data).unwrap();
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod audio_tests {
+    use super::*;
+
+    #[test]
+    fn audio_contour_is_continuous_and_rejoins_both_corners() {
+        let levels = [0.1, 0.7, 0.3, 0.9, 0.4, 0.8, 0.1];
+        for style in [EdgeShape::Spikes, EdgeShape::Wave, EdgeShape::Bars] {
+            assert_eq!(audio_edge_depth(0.0, &levels, style), 0.0);
+            assert_eq!(audio_edge_depth(1.0, &levels, style), 0.0);
+            let mut previous = 0.0;
+            for i in 0..=2000 {
+                let depth = audio_edge_depth(i as f32 / 2000.0, &levels, style);
+                assert!((0.0..=1.0).contains(&depth));
+                assert!((depth - previous).abs() < 0.02);
+                previous = depth;
+            }
+        }
     }
 }

@@ -110,11 +110,10 @@ impl App {
             return self.repaint_expanded();
         }
         let (glyph, text) = match answer {
-            Ok(text) => ('\u{E99A}', text.split_whitespace().collect::<Vec<_>>().join(" ")),
+            Ok(text) => ('\u{E99A}', text),
             Err(why) => ('\u{E783}', why),
         };
-        let short: String = text.chars().take(70).collect();
-        self.notify_for(Notice::Ai, glyph, &format!("AI: {short}"), 7000);
+        self.notify_for(Notice::Ai, glyph, &text, 7000);
     }
 
     pub(in crate::island) fn click_cmd(&mut self, x: i32, y: i32) {
