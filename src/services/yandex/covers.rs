@@ -106,6 +106,7 @@ pub fn load(url: &str, persist: bool) -> Option<Arc<Cover>> {
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "Needs WinRT imaging, which wine does not provide"]
     fn cache_serves_covers_offline_and_replaces_corrupt_entries() {
         unsafe {
             let _ = windows::Win32::System::WinRT::RoInitialize(windows::Win32::System::WinRT::RO_INIT_MULTITHREADED);
