@@ -12,7 +12,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_ALIASED, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateDevice,
     D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory, ID2D1Geometry, ID2D1GeometrySink,
     ID2D1PathGeometry, ID2D1RenderTarget,
@@ -90,7 +90,6 @@ pub struct Gpu {
     icons: PCWSTR,
     vector_icons: Rc<RefCell<super::icons::Cache>>,
     weather: std::cell::RefCell<crate::ui::weather_icons::WeatherIcons>,
-    dc_target: RefCell<Option<windows::Win32::Graphics::Direct2D::ID2D1DCRenderTarget>>,
 }
 
 impl Gpu {
@@ -106,7 +105,6 @@ impl Gpu {
             icons: self.icons,
             vector_icons: Rc::clone(&self.vector_icons),
             weather: std::cell::RefCell::default(),
-            dc_target: RefCell::default(),
         }
     }
 
@@ -130,15 +128,7 @@ impl Gpu {
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let icons = pick_icon_font(&dwrite);
             let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-            Ok(Self {
-                gfx,
-                factory,
-                dwrite,
-                icons,
-                vector_icons: Rc::default(),
-                weather: RefCell::default(),
-                dc_target: RefCell::default(),
-            })
+            Ok(Self { gfx, factory, dwrite, icons, vector_icons: Rc::default(), weather: RefCell::default() })
         }
     }
 
@@ -176,16 +166,7 @@ impl Gpu {
         size: (i32, i32),
         f: impl FnOnce(&Painter),
     ) -> Result<()> {
-        let cached = self.dc_target.borrow_mut().take();
-        let target = match cached {
-            Some(target) => target,
-            None => self.create_dc_target()?,
-        };
-        let result = self.paint_dc_target(&target, hdc, size, f);
-        if result.is_ok() {
-            *self.dc_target.borrow_mut() = Some(target);
-        }
-        result
+        self.paint_dc_target(&self.create_dc_target()?, hdc, size, f)
     }
 
     pub(super) fn create_dc_target(&self) -> Result<windows::Win32::Graphics::Direct2D::ID2D1DCRenderTarget> {
@@ -193,7 +174,7 @@ impl Gpu {
         use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
         unsafe {
             let props = D2D1_RENDER_TARGET_PROPERTIES {
-                r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+                r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
                 pixelFormat: D2D1_PIXEL_FORMAT {
                     format: DXGI_FORMAT_B8G8R8A8_UNORM,
                     alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,

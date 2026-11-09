@@ -10,7 +10,6 @@ mod controls;
 mod home;
 mod home_widgets;
 mod integrations;
-mod macros;
 mod metrics;
 mod mixer;
 mod note;
@@ -22,7 +21,6 @@ mod shelf;
 mod steam;
 mod tabbar;
 mod text;
-mod translate;
 mod weather;
 mod yandex;
 
@@ -33,17 +31,10 @@ impl App {
         if tab != self.ui.tab {
             self.finish_cover_motion();
         }
-        if self.ui.tab == view::Tab::Macros && tab != view::Tab::Macros {
-            self.save_macro_if_dirty();
-            self.ui.macros.capture = false;
-            self.ui.macros.armed_delete = false;
-        }
         self.finish_seek();
         self.finish_mixer();
         self.close_home_mixer();
-        if tab != self.ui.tab
-            || !matches!(tab, view::Tab::Note | view::Tab::Text | view::Tab::Translate | view::Tab::Macros)
-        {
+        if tab != self.ui.tab || !matches!(tab, view::Tab::Note | view::Tab::Text) {
             self.end_edit(true);
         }
         self.ui.notes.armed_delete = false;
@@ -66,12 +57,6 @@ impl App {
             && let Some(text) = clips::sys::read_text(self.hwnd)
         {
             self.ui.text.input.set_text(&text);
-        }
-        if tab == view::Tab::Translate {
-            self.enter_translate();
-        }
-        if tab == view::Tab::Macros {
-            self.enter_macros();
         }
         if tab == view::Tab::Controls {
             self.ui.dark = system::dark_theme();

@@ -581,7 +581,6 @@ impl CompanionWindow {
             self.keep_on_screen();
         }
         let mut drawn = Ok(());
-        let _paint = crate::island::profile::span(4);
         gpu.paint_dc(self.surface.mem, (side, side), |p| {
             if self._state.docking && self._state.returning.is_none() {
                 let inset = side as f32 * 0.12;
@@ -599,13 +598,10 @@ impl CompanionWindow {
                 M32: shift + side as f32 * 0.1625 * factor,
                 ..Default::default()
             });
-            let _draw = crate::island::profile::span(6);
             drawn = characters::draw_with_design(p, character, side as f32 * 0.9, pose, design);
             p.set_transform(&old);
         })?;
-        drop(_paint);
         drawn?;
-        let _layered = crate::island::profile::span(5);
         unsafe {
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,

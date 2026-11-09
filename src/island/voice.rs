@@ -103,7 +103,9 @@ impl App {
             }
             return;
         }
-        wake::start(self.hwnd, voicecmd::wake_words(&self.settings.ai.voice_wake));
+        if !wake::listening() {
+            wake::start(self.hwnd, voicecmd::wake_words(&self.settings.ai.voice_wake));
+        }
         let speaking = self.agent.as_ref().is_some_and(|r| r.phase == Phase::Speaking);
         if (self.wake_session && !speaking) || dictation::active() {
             wake::pause();
@@ -113,8 +115,10 @@ impl App {
     }
 
     pub(in crate::island) fn restart_wake(&mut self) {
-        wake::stop();
-        self.sync_wake();
+        if wake::listening() {
+            wake::stop();
+            self.sync_wake();
+        }
     }
 
     pub(in crate::island) fn end_wake_session(&mut self) {

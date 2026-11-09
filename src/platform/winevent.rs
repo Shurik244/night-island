@@ -28,9 +28,7 @@ unsafe extern "system" fn on_event(
     }
     let raw = TARGET.load(Ordering::Relaxed);
     unsafe {
-        if PostMessageW(Some(HWND(raw as *mut _)), WM_FOREGROUND, WPARAM(0), LPARAM(0)).is_err() {
-            PENDING.store(false, Ordering::Release);
-        }
+        let _ = PostMessageW(Some(HWND(raw as *mut _)), WM_FOREGROUND, WPARAM(0), LPARAM(0));
     }
 }
 

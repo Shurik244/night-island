@@ -23,7 +23,6 @@ fn main() {
     assert!(status.success(), "Could not build capture integration");
     println!("cargo:rerun-if-changed=assets/icon/app.rc");
     println!("cargo:rerun-if-changed=assets/icon/night-island.ico");
-    println!("cargo:rerun-if-changed=assets/icon/app.manifest");
     println!("cargo:rerun-if-env-changed=NI_BACKEND_HOST");
     let host = std::env::var("NI_BACKEND_HOST").unwrap_or_else(|_| "backend.invalid".into());
     println!("cargo:rustc-env=NI_BACKEND_HOST={host}");

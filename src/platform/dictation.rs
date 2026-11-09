@@ -181,11 +181,7 @@ fn capture() -> Result<Vec<i16>> {
     Ok(samples)
 }
 
-pub fn stream(on_chunk: impl FnMut(&[i16]) -> bool) -> Result<()> {
-    stream_every(Duration::from_millis(30), on_chunk)
-}
-
-pub fn stream_every(interval: Duration, mut on_chunk: impl FnMut(&[i16]) -> bool) -> Result<()> {
+pub fn stream(mut on_chunk: impl FnMut(&[i16]) -> bool) -> Result<()> {
     unsafe {
         CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
         struct Runtime;
@@ -228,7 +224,7 @@ pub fn stream_every(interval: Duration, mut on_chunk: impl FnMut(&[i16]) -> bool
         let _recording = Recording(client);
         let mut chunk: Vec<i16> = Vec::with_capacity(RATE as usize / 4);
         'run: loop {
-            std::thread::sleep(interval);
+            std::thread::sleep(Duration::from_millis(30));
             chunk.clear();
             while chunk.len() < RATE as usize && capture.GetNextPacketSize()? > 0 {
                 let (mut data, mut frames, mut flags) = (std::ptr::null_mut(), 0u32, 0u32);

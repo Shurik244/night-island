@@ -98,7 +98,6 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_Controls_Dialogs",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_Input_XboxController",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_Shell_PropertiesSystem",
@@ -112,7 +111,6 @@ ed25519-dalek = "3.0.0"
 toml_edit = "0.25"
 tar = { version = "0.4", default-features = false }
 bzip2-rs = "0.1"
-vigem-client = "0.1.4"
 
 [profile.release]
 opt-level = 3
@@ -120,12 +118,6 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
-
-[profile.quick]
-inherits = "release"
-lto = false
-codegen-units = 16
-incremental = true
 
 [profile.dev.package.windows]
 debug = 0
