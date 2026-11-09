@@ -570,6 +570,7 @@ mod tile_tests {
     }
 
     #[test]
+    #[ignore = "Needs real DirectWrite text measuring, which wine does not provide"]
     fn notification_cards_follow_wrapping_font_and_content_length() {
         let selected = crate::ui::fonts::selected();
         for font in crate::data::settings::InterfaceFont::ALL {
