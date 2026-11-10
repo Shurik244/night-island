@@ -666,10 +666,33 @@ impl App {
         self.notify(Notice::Integrations, '\u{E73E}', "Voice service saved");
     }
 
+    pub(in crate::island) fn on_ai_checked(&mut self) {
+        let Some((serial, key, result)) = ai::take_connection_check() else { return };
+        if serial != self.ui.int.ai_check_serial {
+            return;
+        }
+        self.ui.int.ai_check_pending = false;
+        if key != ai::connection_key(&self.settings.ai) {
+            self.render_settings_win();
+            return;
+        }
+
+        self.ui.int.ai_check = Some(result);
+        self.render_settings_win();
+    }
+
+    fn check_ai(&mut self) {
+        self.ui.int.ai_check_key = ai::connection_key(&self.settings.ai);
+        self.ui.int.ai_check_pending = true;
+        self.ui.int.ai_check = None;
+        self.ui.int.ai_check_serial = ai::check_connection(self.hwnd, self.settings.ai.clone());
+        self.render_settings_win();
+    }
+
     fn save_ai(&mut self) {
         let provider = self.settings.ai.provider;
         let key = self.ui.int.ai_key.text();
-        if !key.trim().is_empty() && !ai::save_key(provider, &key) {
+        if !key.trim().is_empty() && !ai::valid_key(&key) {
             return self.notify(Notice::Error, '\u{E783}', "That does not look like an API key");
         }
         let model = self.ui.int.ai_model.text().trim().to_string();
@@ -677,6 +700,7 @@ impl App {
         if !ai::valid_model(&model, provider) {
             return self.notify(Notice::Error, '\u{E783}', "That model name is not valid");
         }
+        let mut next = self.settings.ai.clone();
         if provider == crate::data::settings::AiProvider::OpenAi {
             let Some(base) = ai::clean_base(&self.ui.int.ai_base.text()) else {
                 return self.notify(
@@ -685,14 +709,24 @@ impl App {
                     "The server address must be https:// (or local http://)",
                 );
             };
-            self.settings.ai.openai_base = base;
+            next.openai_base = base;
         }
-        self.settings.ai.set_model(provider, &model);
+        next.set_model(provider, &model);
+        if !key.trim().is_empty() && !ai::save_key(provider, &key) {
+            return self.notify(Notice::Error, '\u{E783}', "Could not save the key");
+        }
+        self.settings.ai = next;
         self.settings.save();
         self.ui.cfg = self.settings.clone();
         ai::configure(&self.settings.ai);
         self.sync_ai_fields();
-        self.notify(Notice::Integrations, '\u{E73E}', "AI settings saved");
+        if self.settings.ai_check_on_save {
+            self.check_ai();
+        } else {
+            self.ui.int.ai_check_pending = false;
+            self.ui.int.ai_check = None;
+            self.notify(Notice::Integrations, '\u{E73E}', "AI settings saved");
+        }
     }
 
     fn begin_rebind(&mut self, hotkey: Hotkey) {
@@ -957,6 +991,36 @@ impl App {
                 }
             }
             view::Act::AiSave => self.save_ai(),
+            view::Act::AiCheck => self.check_ai(),
+            view::Act::GameAiSettings => {
+                if let Some(group) = view::GROUPS.iter().position(|g| g.name == "Assistant") {
+                    self.open_settings_at(group);
+                    self.ui.sw.assistant_page = view::AssistantPage::Model;
+                    self.render_settings_win();
+                }
+            }
+            view::Act::GameAlwaysShow => {
+                crate::platform::game_mode::set_rule(Some(false));
+                self.on_game_timer();
+                self.render_settings_win();
+            }
+            view::Act::GameTreatAsGame => {
+                crate::platform::game_mode::set_rule(Some(true));
+                self.on_game_timer();
+                self.render_settings_win();
+            }
+            view::Act::GameAutomatic => {
+                crate::platform::game_mode::set_rule(None);
+                self.on_game_timer();
+                self.render_settings_win();
+            }
+            view::Act::GameRemoveRule(index) => {
+                if let Some((path, _)) = crate::platform::game_mode::rules().get(index) {
+                    crate::platform::game_mode::remove_rule(path);
+                }
+                self.on_game_timer();
+                self.render_settings_win();
+            }
             view::Act::VoiceSave => self.save_voice(),
             view::Act::TtsSave => self.save_tts(),
             view::Act::TtsRemoveKey => {
@@ -987,6 +1051,9 @@ impl App {
             }
             view::Act::AiRemoveKey => {
                 ai::remove_key(self.settings.ai.provider);
+                self.ui.int.ai_check_pending = false;
+                self.ui.int.ai_check = None;
+                self.ui.int.ai_check_serial = 0;
                 self.sync_ai_fields();
             }
             view::Act::SpotifySaveId => {

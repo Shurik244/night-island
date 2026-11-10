@@ -32,52 +32,9 @@ pub(in crate::island) fn unregister_hotkeys(hwnd: HWND) {
     }
 }
 
-pub(in crate::island) fn fullscreen_app_in_front(own: HWND) -> bool {
-    use windows::Win32::UI::Shell::{
-        QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
-    };
-    unsafe {
-        if SHQueryUserNotificationState()
-            .is_ok_and(|s| s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_BUSY || s == QUNS_PRESENTATION_MODE)
-        {
-            return true;
-        }
-        let fg = GetForegroundWindow();
-        if fg.is_invalid() || fg == own || fg == GetShellWindow() || fg == GetDesktopWindow() {
-            return false;
-        }
-        let mut class = [0u16; 64];
-        let n = GetClassNameW(fg, &mut class) as usize;
-        let class = String::from_utf16_lossy(&class[..n]);
-        if matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
-            return false;
-        }
-        let style = GetWindowLongW(fg, GWL_STYLE) as u32;
-        if style & WS_CAPTION.0 == WS_CAPTION.0 {
-            return false;
-        }
-        let mut rc = windows::Win32::Foundation::RECT::default();
-        if GetWindowRect(fg, &mut rc).is_err() {
-            return false;
-        }
-        let monitor = windows::Win32::Graphics::Gdi::MonitorFromWindow(
-            fg,
-            windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTONEAREST,
-        );
-        let mut info = windows::Win32::Graphics::Gdi::MONITORINFO {
-            cbSize: size_of::<windows::Win32::Graphics::Gdi::MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        if !windows::Win32::Graphics::Gdi::GetMonitorInfoW(monitor, &mut info).as_bool() {
-            return false;
-        }
-        let m = info.rcMonitor;
-        rc.left <= m.left && rc.top <= m.top && rc.right >= m.right && rc.bottom >= m.bottom
-    }
-}
-
 impl App {
     pub(in crate::island) fn start_game_watch(&mut self) {
+        crate::platform::game_mode::configure(self.settings.game_mode && self.settings.game_ai);
         if self.settings.game_mode {
             winevent::start(self.hwnd);
             self.set_timer(Timer::Game, GAME_POLL_MS);
@@ -100,7 +57,10 @@ impl App {
         if !self.settings.game_mode {
             return;
         }
-        let gaming = self.state != State::Expanded && fullscreen_app_in_front(self.hwnd);
+        let gaming = crate::platform::game_mode::foreground().is_some_and(|probe| {
+            let game = crate::platform::game_mode::is_game(&probe, self.settings.game_ai, self.hwnd);
+            self.state != State::Expanded && game && (probe.fullscreen || self.settings.game_windowed)
+        });
         self.set_gaming(gaming);
         let looks = SETTLE_LOOKS.load(std::sync::atomic::Ordering::Relaxed);
         if looks > 0 {

@@ -575,8 +575,19 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
             }
             LRESULT(0)
         }
+        wake::WM_WAKE_STATUS => {
+            with_app(|a| {
+                if let Some(Err(why)) = wake::take_status() {
+                    a.notify(Notice::Error, '\u{E783}', &why);
+                }
+                a.render_settings_win();
+            });
+            LRESULT(0)
+        }
         wake::WM_WAKE => {
-            with_app(|a| a.on_wake());
+            if wake::current_revision(wparam.0 as u64) {
+                with_app(|a| a.on_wake());
+            }
             LRESULT(0)
         }
         wake_install::WM_WAKE_SETUP => {
@@ -620,6 +631,17 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
         }
         ai::WM_SORT => {
             with_app(|a| a.on_sort());
+            LRESULT(0)
+        }
+        crate::platform::game_mode::WM_GAME_CLASSIFIED => {
+            with_app(|a| {
+                a.on_game_timer();
+                a.render_settings_win();
+            });
+            LRESULT(0)
+        }
+        ai::WM_AI_CHECKED => {
+            with_app(|a| a.on_ai_checked());
             LRESULT(0)
         }
         ai::WM_AI => {

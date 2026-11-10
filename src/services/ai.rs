@@ -53,6 +53,63 @@ pub fn busy() -> bool {
     BUSY.load(Ordering::SeqCst)
 }
 
+pub const WM_AI_CHECKED: u32 = WM_APP + 110;
+static CHECK_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub type ConnectionCheck = (u64, String, Result<(), String>);
+static CHECK_RESULT: Mutex<Option<ConnectionCheck>> = Mutex::new(None);
+
+pub fn connection_key(settings: &AiSettings) -> String {
+    format!(
+        "{}|{}|{}",
+        settings.provider.id(),
+        settings.model(settings.provider),
+        if settings.provider == AiProvider::OpenAi { settings.openai_base.as_str() } else { "" }
+    )
+}
+
+pub fn check_connection(hwnd: HWND, settings: AiSettings) -> u64 {
+    let serial = CHECK_SERIAL.fetch_add(1, Ordering::AcqRel) + 1;
+    let signature = connection_key(&settings);
+    let key = integrations::load_secret(&secret_name(settings.provider));
+    let raw = hwnd.0 as isize;
+    std::thread::spawn(move || {
+        let result = match key {
+            Some(key) => build(
+                &settings,
+                &key,
+                &[ChatTurn::text(false, "Reply with OK.")],
+                "This is a connection test. Reply with OK.",
+                512,
+                true,
+            )
+            .ok_or_else(|| "The model or server address is invalid".to_string())
+            .and_then(|call| {
+                let headers: Vec<(&str, &str)> = call.headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                let reply = http::post_json(&call.url, &headers, &call.body, Some(USER_AGENT))
+                    .ok_or("No connection to the service or the request timed out")?;
+                parse_reply(settings.provider, reply.status, &reply.body)
+                    .map(|_| ())
+                    .map_err(|why| why.replace(&key, "[hidden]"))
+            }),
+            None => Err("No key is saved for this service".into()),
+        };
+        let mut slot = CHECK_RESULT.lock().unwrap_or_else(|e| e.into_inner());
+        if CHECK_SERIAL.load(Ordering::Acquire) != serial {
+            return;
+        }
+        *slot = Some((serial, signature, result));
+        drop(slot);
+        unsafe {
+            let _ = PostMessageW(Some(HWND(raw as *mut c_void)), WM_AI_CHECKED, WPARAM(0), LPARAM(0));
+        }
+    });
+    serial
+}
+
+pub fn take_connection_check() -> Option<ConnectionCheck> {
+    CHECK_RESULT.lock().ok()?.take()
+}
+
 pub fn configure(settings: &AiSettings) {
     let cell = CONFIG.get_or_init(|| Mutex::new(AiSettings::default()));
     if let Ok(mut g) = cell.lock() {
@@ -759,6 +816,24 @@ fn run_with(settings: &AiSettings, make_call: impl FnOnce(&str) -> Option<Call>)
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "Sends a small connection check using the configured AI account without changing settings"]
+    fn configured_ai_connection_check_returns_an_answer() {
+        let settings = crate::data::settings::Settings::load().ai;
+        assert!(has_key(settings.provider), "Set up an AI service first");
+        let serial = check_connection(HWND::default(), settings.clone());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(75);
+        loop {
+            if let Some((returned, key, result)) = take_connection_check() {
+                assert_eq!(returned, serial);
+                assert_eq!(key, connection_key(&settings));
+                result.expect("The configured model did not pass the connection check");
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "Connection check did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
     fn settings(provider: AiProvider) -> AiSettings {
         AiSettings { provider, ..AiSettings::default() }
     }

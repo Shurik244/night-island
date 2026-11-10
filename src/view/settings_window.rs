@@ -23,8 +23,9 @@ const GENERAL: [(Sid, &str, Kind); 10] = [
     (Sid::ActivityTrack, "Track activity (time in programs)", Kind::Toggle),
 ];
 
-const ISLAND: [(Sid, &str, Kind); 22] = [
+const ISLAND: [(Sid, &str, Kind); 23] = [
     (Sid::HomeWidgets, "Resizable widgets on Home", Kind::Toggle),
+    (Sid::HomeWidgetDetails, "Detailed tool widgets", Kind::Toggle),
     (Sid::HomeWeatherWidget, "Weather widget in unused space", Kind::Toggle),
     (Sid::LiveActivities, "Live activities", Kind::Toggle),
     (Sid::LiveMusicPriority, "Activities take priority over track introductions", Kind::Toggle),
@@ -149,9 +150,9 @@ const ROWS_TABS_ONLY: [(Sid, &str, Kind); 14] = [
 ];
 
 pub const SIDEBAR_SECTIONS: [(usize, &str); 5] =
-    [(0, "Application"), (6, "Look and feel"), (11, "Monitoring"), (14, "Services"), (17, "Program")];
+    [(0, "Application"), (7, "Look and feel"), (12, "Monitoring"), (15, "Services"), (18, "Program")];
 
-pub const GROUPS: [Group; 18] = [
+pub const GROUPS: [Group; 19] = [
     Group {
         glyph: '\u{E713}',
         name: "General",
@@ -159,6 +160,7 @@ pub const GROUPS: [Group; 18] = [
         custom: None,
         sections: &[(0, "Application"), (3, "Behaviour"), (6, "Privacy"), (8, "Advanced")],
     },
+    Group { glyph: '\u{E7FC}', name: "Game mode", rows: &[], custom: Some(game_mode_items), sections: &[] },
     Group {
         glyph: '\u{E80F}',
         name: "Island",
@@ -166,10 +168,10 @@ pub const GROUPS: [Group; 18] = [
         custom: None,
         sections: &[
             (0, "Widgets"),
-            (2, "Live activities"),
-            (7, "Ghost mode"),
-            (12, "Placement and look"),
-            (20, "Open and close"),
+            (3, "Live activities"),
+            (8, "Ghost mode"),
+            (13, "Placement and look"),
+            (21, "Open and close"),
         ],
     },
     Group { glyph: '\u{E7F4}', name: "Desktop dock", rows: &[], custom: Some(desktop_dock_items), sections: &[] },
@@ -297,6 +299,12 @@ pub enum Act {
     SpotifyMain,
     SpotifySaveId,
     AiSave,
+    AiCheck,
+    GameAlwaysShow,
+    GameTreatAsGame,
+    GameAutomatic,
+    GameAiSettings,
+    GameRemoveRule(usize),
     AiRemoveKey,
     VoiceSave,
     VoiceRemoveKey,
@@ -388,6 +396,7 @@ pub(in crate::view) enum Item {
     Pair(Act, String, String, bool),
     Note(&'static str),
     Text(String),
+    Message(String, bool),
 }
 
 impl Item {
@@ -400,6 +409,7 @@ impl Item {
             Item::Row(..) | Item::Field(..) | Item::Button(..) | Item::Pair(..) => ROW_H,
             Item::Service { .. } => SERVICE_H,
             Item::Note(_) | Item::Text(_) => NOTE_H,
+            Item::Message(..) => 70.0,
         }
     }
 }
@@ -428,6 +438,38 @@ fn spotify_status_text(s: &spotify::State) -> (String, bool) {
         S::Error(why) => why.clone(),
     };
     (text, s.status == S::Connected)
+}
+
+fn game_mode_items(ui: &UiState) -> Vec<Item> {
+    let mut out = vec![
+        Item::Heading("Game mode"),
+        Item::Row(Sid::GameMode, "Game mode", Kind::Toggle),
+        Item::Row(Sid::GameAi, "Learn unknown apps with AI", Kind::Toggle),
+        Item::Row(Sid::GameWindowed, "Hide in windowed games too", Kind::Toggle),
+        Item::Note("AI sees only the executable name and product description."),
+        Item::Note("No window titles, screenshots or full paths are sent."),
+        Item::Note("Unknown apps stay visible until classified. Desktop and Island windows are never games."),
+    ];
+    if ui.cfg.game_ai && !crate::services::ai::has_key(ui.cfg.ai.provider) {
+        out.push(Item::Note("Without an AI key, built-in rules and your own rules still work."));
+        out.push(Item::Button(Act::GameAiSettings, "Set up the AI model".into(), true));
+    }
+    if let Some((name, status)) = crate::platform::game_mode::last_status() {
+        out.push(Item::Section("Last active app"));
+        out.push(Item::Text(name));
+        out.push(Item::Text(crate::ui::i18n::tr(&status).into_owned()));
+        out.push(Item::Button(Act::GameAlwaysShow, "Always show the island in this app".into(), true));
+        out.push(Item::Button(Act::GameTreatAsGame, "Treat this app as a game".into(), true));
+        out.push(Item::Button(Act::GameAutomatic, "Recognize this app automatically".into(), true));
+    }
+    let rules = crate::platform::game_mode::rules();
+    if !rules.is_empty() {
+        out.push(Item::Section("Your app rules"));
+    }
+    for (index, (_, label)) in rules.into_iter().enumerate() {
+        out.push(Item::Pair(Act::GameRemoveRule(index), label, "Remove rule".into(), false));
+    }
+    out
 }
 
 fn integration_items(ui: &UiState) -> Vec<Item> {
@@ -955,12 +997,18 @@ fn assistant_model_items(ui: &UiState) -> Vec<Item> {
     let provider = ui.cfg.ai.provider;
     let saved = ui.int.ai_key_saved;
     let mut out = vec![Item::Heading("AI model"), Item::Row(Sid::AiProvider, "Service", Kind::Cycle)];
-    out.push(Item::Service {
-        name: provider.name(),
-        glyph: '\u{E99A}',
-        status: if saved { "Key saved".into() } else { "No key yet".into() },
-        live: saved,
-    });
+    let matches = ui.int.ai_check_key == crate::services::ai::connection_key(&ui.cfg.ai);
+    let checked = matches && matches!(ui.int.ai_check, Some(Ok(())));
+    let status = if matches && ui.int.ai_check_pending {
+        "Checking connection…"
+    } else if checked {
+        "Connection verified"
+    } else if saved {
+        "Key saved; connection not verified"
+    } else {
+        "No key yet"
+    };
+    out.push(Item::Service { name: provider.name(), glyph: '\u{E99A}', status: status.into(), live: checked });
     out.push(Item::Field(
         Field::AiKey,
         "API key",
@@ -970,7 +1018,26 @@ fn assistant_model_items(ui: &UiState) -> Vec<Item> {
     if provider == AiProvider::OpenAi {
         out.push(Item::Field(Field::AiBase, "Server address", "https://api.openai.com/v1"));
     }
-    out.push(Item::Button(Act::AiSave, "Save".into(), true));
+    out.push(Item::Row(Sid::AiCheckOnSave, "Test the connection after saving", Kind::Toggle));
+    out.push(Item::Button(Act::AiSave, if ui.cfg.ai_check_on_save { "Save and check" } else { "Save" }.into(), true));
+    if ui.int.ai_check_key == crate::services::ai::connection_key(&ui.cfg.ai) {
+        if ui.int.ai_check_pending {
+            out.push(Item::Text("Checking key, model and server…".into()));
+        } else if let Some(result) = &ui.int.ai_check {
+            out.push(Item::Message(
+                match result {
+                    Ok(()) => "Connection verified. The model answered.".into(),
+                    Err(why) => why.clone(),
+                },
+                result.is_ok(),
+            ));
+        }
+    }
+    out.push(Item::Note("Checking sends one small test request to the selected model."));
+    if saved {
+        out.push(Item::Button(Act::AiCheck, "Check connection".into(), !(ui.int.ai_check_pending && matches)));
+    }
+
     if saved {
         out.push(Item::Button(Act::AiRemoveKey, "Remove the saved key".into(), true));
     }
@@ -1994,6 +2061,24 @@ pub fn paint_settings_window(p: &Painter, size: (f32, f32), scale: f32, ui: &UiS
                         DWRITE_FONT_WEIGHT_NORMAL,
                         DWRITE_TEXT_ALIGNMENT_LEADING,
                         rgba(1.0, 1.0, 1.0, 0.75),
+                    )?;
+                }
+                Item::Message(text, good) => {
+                    let color = if good { rgba(0.35, 0.9, 0.55, 1.0) } else { rgba(1.0, 0.4, 0.4, 1.0) };
+                    let rect = (l.content.0, top + 3.0 * scale, l.content.2, top + 64.0 * scale);
+                    p.fill_round_rect(rect, 12.0 * scale, rgba(color.r, color.g, color.b, 0.1))?;
+                    p.glyph(
+                        if good { '\u{E73E}' } else { '\u{E783}' },
+                        (rect.0 + 8.0 * scale, rect.1, rect.0 + 34.0 * scale, rect.3),
+                        17.0 * scale,
+                        color,
+                    )?;
+                    p.text_wrapped(
+                        &crate::ui::i18n::tr(&text),
+                        (rect.0 + 42.0 * scale, rect.1 + 5.0 * scale, rect.2 - 10.0 * scale, rect.3 - 5.0 * scale),
+                        12.5 * scale,
+                        DWRITE_FONT_WEIGHT_NORMAL,
+                        color,
                     )?;
                 }
                 Item::Note(text) => {
