@@ -267,6 +267,11 @@ impl App {
         } else {
             None
         };
+        let hover_translate = if self.ui.tab == view::Tab::Translate {
+            view::hit_translate(pill, self.scale, fx, fy, &self.ui.cfg)
+        } else {
+            None
+        };
         let hover_act = if self.ui.tab == view::Tab::Home && self.ui.home.dev_menu.is_some() {
             let count = self.ui.home.dev_menu.as_ref().map_or(0, |m| m.0.len());
             match view::hit_menu(pill, self.scale, fx, fy, count, view::home_wide(&self.ui)) {
@@ -404,10 +409,12 @@ impl App {
             || hover_clip != self.ui.clip.hover
             || hover_ctl != self.ui.hover_ctl
             || hover_text != self.ui.text.hover
+            || hover_translate != self.ui.translate.hover
             || hover_note != self.ui.notes.hover
         {
             self.ui.notes.hover = hover_note;
             self.ui.text.hover = hover_text;
+            self.ui.translate.hover = hover_translate;
             self.ui.hover_tab = hover_tab;
             self.ui.hover_sub = hover_sub;
             self.ui.clip.hover = hover_clip;
@@ -535,6 +542,7 @@ impl App {
             view::Tab::Notifications => self.click_notifications(x, y),
             view::Tab::Note => self.click_note(x, y),
             view::Tab::Text => self.click_text(x, y),
+            view::Tab::Translate => self.click_translate(x, y),
             view::Tab::Record => self.click_record(x, y),
             view::Tab::Home => self.click_home(x, y),
             view::Tab::Weather => self.click_weather(x, y),
@@ -662,7 +670,16 @@ impl App {
             }
             return;
         }
-        if matches!(self.ui.tab, view::Tab::Note | view::Tab::Text) {
+        if self.ui.tab == view::Tab::Translate
+            && let Some((x, y)) = self.cursor_client()
+            && view::over_translate_result(self.pill_rect(true), self.scale, x, y)
+        {
+            let step = 42.0 * self.scale * if delta > 0 { -1.0 } else { 1.0 };
+            self.ui.translate.res_scroll = (self.ui.translate.res_scroll + step).max(0.0);
+            self.repaint_expanded();
+            return;
+        }
+        if matches!(self.ui.tab, view::Tab::Note | view::Tab::Text | view::Tab::Translate) {
             let Some(layout) = self.note_layout() else { return };
             let inner = self.note_inner();
             let max = (edit::content_height(&layout) - (inner.3 - inner.1)).max(0.0);
@@ -814,6 +831,7 @@ impl App {
             | self.ui.clip.hover.take().is_some()
             | self.ui.hover_ctl.take().is_some()
             | self.ui.text.hover.take().is_some()
+            | self.ui.translate.hover.take().is_some()
             | self.ui.notes.hover.take().is_some()
             | self.ui.home.hover_act.take().is_some()
             | self.ui.hover_head.take().is_some();

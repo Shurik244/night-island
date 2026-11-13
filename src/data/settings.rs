@@ -504,6 +504,7 @@ pub struct Settings {
     pub update_check: bool,
     pub update_beta: bool,
     pub ai: AiSettings,
+    pub translate: TranslateSettings,
     pub assistant: crate::services::assistant::Assistant,
     pub hidden_tabs: Vec<String>,
     pub notify: NotifySettings,
@@ -652,6 +653,7 @@ impl Default for Settings {
             update_check: true,
             update_beta: false,
             ai: AiSettings::default(),
+            translate: TranslateSettings::default(),
             assistant: crate::services::assistant::Assistant::default(),
             hidden_tabs: Vec::new(),
             notify: NotifySettings::default(),
@@ -759,6 +761,81 @@ impl AiProvider {
             AiProvider::OpenAi => "gpt-4o-mini",
             AiProvider::Gemini => "gemini-2.0-flash",
         }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TranslateProvider {
+    #[default]
+    Google,
+    Bing,
+    MyMemory,
+    DeepL,
+    GoogleCloud,
+    Azure,
+    Assistant,
+}
+
+impl TranslateProvider {
+    pub const ALL: [TranslateProvider; 7] = [
+        TranslateProvider::Google,
+        TranslateProvider::Bing,
+        TranslateProvider::MyMemory,
+        TranslateProvider::DeepL,
+        TranslateProvider::GoogleCloud,
+        TranslateProvider::Azure,
+        TranslateProvider::Assistant,
+    ];
+
+    pub const FREE: [TranslateProvider; 3] =
+        [TranslateProvider::Google, TranslateProvider::Bing, TranslateProvider::MyMemory];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            TranslateProvider::Google => "google",
+            TranslateProvider::Bing => "bing",
+            TranslateProvider::MyMemory => "mymemory",
+            TranslateProvider::DeepL => "deepl",
+            TranslateProvider::GoogleCloud => "gcloud",
+            TranslateProvider::Azure => "azure",
+            TranslateProvider::Assistant => "assistant",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TranslateProvider::Google => "Google (free)",
+            TranslateProvider::Bing => "Bing (free)",
+            TranslateProvider::MyMemory => "MyMemory (free)",
+            TranslateProvider::DeepL => "DeepL (key)",
+            TranslateProvider::GoogleCloud => "Google Cloud (key)",
+            TranslateProvider::Azure => "Azure (key)",
+            TranslateProvider::Assistant => "Assistant (AI)",
+        }
+    }
+
+    pub fn needs_key(self) -> bool {
+        matches!(self, TranslateProvider::DeepL | TranslateProvider::GoogleCloud | TranslateProvider::Azure)
+    }
+
+    pub fn step(self, forward: bool) -> Self {
+        let at = Self::ALL.iter().position(|p| *p == self).unwrap_or(0);
+        Self::ALL[(at + if forward { 1 } else { Self::ALL.len() - 1 }) % Self::ALL.len()]
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct TranslateSettings {
+    pub provider: TranslateProvider,
+    pub target: String,
+    pub auto: bool,
+}
+
+impl Default for TranslateSettings {
+    fn default() -> Self {
+        Self { provider: TranslateProvider::default(), target: "en".into(), auto: true }
     }
 }
 
@@ -936,7 +1013,7 @@ impl WeatherSide {
 pub const HEADER_TAB_LIMIT: usize = HIDEABLE_TABS.len();
 pub const DEFAULT_HEADER_TABS: [&str; 5] = ["Clipboard", "Text", "Note", "Weather", "Record"];
 
-pub const HIDEABLE_TABS: [&str; 13] = [
+pub const HIDEABLE_TABS: [&str; 14] = [
     "Clipboard",
     "Text",
     "Note",
@@ -950,6 +1027,7 @@ pub const HIDEABLE_TABS: [&str; 13] = [
     "App mixer",
     "Notifications",
     "My Wave",
+    "Translate",
 ];
 
 impl Settings {
@@ -1123,6 +1201,9 @@ impl Settings {
         }
         self.hidden_tabs = seen;
         self.ai.sanitize();
+        if !crate::services::translate::LANGUAGES.iter().any(|(code, _)| *code == self.translate.target) {
+            self.translate.target = TranslateSettings::default().target;
+        }
         self.assistant.sanitize();
         self.record_fps = self.record_fps.clamp(10, 60);
         self.pill_opacity = clamp_f(self.pill_opacity, 0.2, 1.0, 1.0);

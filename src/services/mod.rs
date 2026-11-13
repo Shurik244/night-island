@@ -11,6 +11,7 @@ pub mod lyrics;
 pub mod proto;
 pub mod spotify;
 pub mod sync;
+pub mod translate;
 pub mod update;
 pub mod weather;
 pub mod yandex;

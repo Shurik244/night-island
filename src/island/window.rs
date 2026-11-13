@@ -622,6 +622,10 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
             with_app(|a| a.on_sort());
             LRESULT(0)
         }
+        crate::services::translate::WM_TRANSLATE => {
+            with_app(|a| a.on_translate());
+            LRESULT(0)
+        }
         ai::WM_AI => {
             with_app(|a| a.on_ai());
             LRESULT(0)

@@ -79,6 +79,9 @@ impl App {
         if self.ui.tab == view::Tab::Note && self.ui.notes.renaming.is_none() {
             self.set_timer(Timer::NoteSave, NOTE_SAVE_MS);
         }
+        if self.ui.tab == view::Tab::Translate {
+            self.schedule_translate();
+        }
         self.ui.caret_on = true;
         if self.ui.editing {
             self.set_timer(Timer::Caret, CARET_BLINK_MS);
@@ -612,7 +615,9 @@ impl App {
         {
             return false;
         }
-        if self.state != State::Expanded || !matches!(self.ui.tab, view::Tab::Note | view::Tab::Text) {
+        if self.state != State::Expanded
+            || !matches!(self.ui.tab, view::Tab::Note | view::Tab::Text | view::Tab::Translate)
+        {
             return false;
         }
         let Some((x, y)) = self.cursor_client() else { return false };
@@ -620,6 +625,7 @@ impl App {
         let frame = match self.ui.tab {
             view::Tab::Note => view::note_frame_for(pill, self.scale, self.ui.notes.remind.is_some()).0,
             view::Tab::Text => view::text_frame(pill, self.scale).0,
+            view::Tab::Translate => view::translate_field(pill, self.scale).0,
             _ => return false,
         };
         x >= frame.0 && x < frame.2 && y >= frame.1 && y < frame.3

@@ -49,6 +49,7 @@ mod settings_window;
 mod steam;
 mod text;
 mod tips;
+mod translate;
 mod wave_theme;
 mod weather;
 mod widgets;
@@ -59,8 +60,8 @@ pub use self::tips::content_tip;
 pub use self::{
     activity::*, agy::*, chat::*, clipboard::*, command::*, companion_popup::*, controls::*, discord::*, frame::*,
     home::*, integrations::*, metrics::*, mixer::*, music_intro::*, note::*, notifications::*, pill::*,
-    pill_vertical::*, privacy::*, record::*, remind::*, settings::*, settings_window::*, steam::*, text::*, weather::*,
-    widgets::*, yandex::*,
+    pill_vertical::*, privacy::*, record::*, remind::*, settings::*, settings_window::*, steam::*, text::*,
+    translate::*, weather::*, widgets::*, yandex::*,
 };
 pub use guide::*;
 pub use home_widgets::*;
@@ -89,10 +90,11 @@ pub enum Tab {
     Mixer,
     Notifications,
     Yandex,
+    Translate,
     Settings,
 }
 
-pub const TABS: [(Tab, char, &str); 17] = [
+pub const TABS: [(Tab, char, &str); 18] = [
     (Tab::Home, '\u{E80F}', "Home"),
     (Tab::Clipboard, '\u{E77F}', "Clipboard"),
     (Tab::Text, '\u{E8E9}', "Text"),
@@ -109,6 +111,7 @@ pub const TABS: [(Tab, char, &str); 17] = [
     (Tab::Mixer, '\u{E9E9}', "App mixer"),
     (Tab::Notifications, '\u{EA8F}', "Notifications"),
     (Tab::Yandex, crate::ui::icons::YANDEX_MUSIC_GLYPH, "My Wave"),
+    (Tab::Translate, '\u{E775}', "Translate"),
     (Tab::Settings, '\u{E713}', "Settings"),
 ];
 
@@ -170,6 +173,7 @@ pub struct UiState {
     pub remind: RemindUi,
     pub cfg: Settings,
     pub text: TextUi,
+    pub translate: TranslateUi,
     pub editing: bool,
     pub caret_on: bool,
     pub media: Media,
@@ -237,6 +241,7 @@ impl UiState {
             remind: RemindUi::default(),
             int: IntegrationsUi::default(),
             text: TextUi::default(),
+            translate: TranslateUi::default(),
             clip: ClipUi::default(),
             city: CityUi::default(),
             home: HomeUi::default(),
