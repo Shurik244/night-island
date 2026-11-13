@@ -9,7 +9,6 @@ pub mod capture;
 pub mod dictation;
 pub mod dnd;
 pub mod downloads;
-pub mod game_mode;
 pub mod localvoice;
 pub mod lockkeys;
 pub mod media;

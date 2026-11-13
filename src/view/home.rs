@@ -94,7 +94,6 @@ pub struct HomeUi {
     pub widgets: HomeWidgets,
     pub edit_scroll: usize,
     pub screen_secs: Option<i64>,
-    pub widget_activity: Vec<(String, i64)>,
 }
 
 impl Default for HomeUi {
@@ -121,7 +120,6 @@ impl Default for HomeUi {
             widgets: Default::default(),
             edit_scroll: 0,
             screen_secs: None,
-            widget_activity: Vec::new(),
         }
     }
 }
@@ -644,7 +642,6 @@ pub(in crate::view) fn media_btn(pill: Rect, scale: f32, i: usize, wide: bool) -
 #[derive(Clone, Copy, PartialEq)]
 pub enum HomeHit {
     WidgetControl(WidgetControl),
-    WidgetCommand(WidgetCommand),
     WidgetHandle(u8),
     Live(usize),
     Notification,

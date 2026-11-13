@@ -84,15 +84,9 @@ impl App {
     }
 
     pub(in crate::island) fn refresh_screen_time(&mut self) {
-        self.ui.home.widget_activity.clear();
         self.ui.home.screen_secs = if self.settings.activity_track {
-            self.store.as_ref().map(|store| {
-                let mut apps = store.activity_since(activity::today(), 1000);
-                let total = apps.iter().map(|(_, seconds)| *seconds).sum();
-                apps.sort_by_key(|(_, seconds)| std::cmp::Reverse(*seconds));
-                self.ui.home.widget_activity = apps.into_iter().take(4).collect();
-                total
-            })
+            let today = activity::today();
+            self.store.as_ref().map(|s| s.activity_since(today, 1000).iter().map(|(_, secs)| *secs).sum())
         } else {
             None
         };

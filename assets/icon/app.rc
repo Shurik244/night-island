@@ -1,2 +1,3 @@
-// Windows resources of the program: the application icon (id 1, also used by the tray).
+// Windows resources of the program: the application icon (id 1, also used by the tray) and the manifest.
 1 ICON "night-island.ico"
+1 24 "app.manifest"

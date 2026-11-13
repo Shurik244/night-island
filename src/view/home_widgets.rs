@@ -152,9 +152,6 @@ pub fn weather_widget_id() -> u8 {
 }
 
 pub fn widget_size(ui: &UiState, id: u8) -> WidgetSize {
-    if ui.cfg.home_widget_details && !detailed_widget(id) {
-        return WidgetSize::Tile;
-    }
     ui.home
         .widgets
         .preview
@@ -180,9 +177,6 @@ fn specs(ui: &UiState) -> Vec<(u8, WidgetSize)> {
 }
 
 pub fn can_resize_widget(ui: &UiState, id: u8, size: WidgetSize) -> bool {
-    if ui.cfg.home_widget_details && !detailed_widget(id) && size != WidgetSize::Tile {
-        return false;
-    }
     let mut items = specs(ui);
     match items.iter_mut().find(|v| v.0 == id) {
         Some(item) => item.1 = size,
@@ -265,23 +259,10 @@ pub fn hit_home_widget(pill: Rect, s: f32, ui: &UiState, x: f32, y: f32) -> Opti
         if opacity < 0.2 || !visible.iter().any(|v| v.id == id) {
             continue;
         }
-        if ui.home.widgets.editing
-            && (!ui.cfg.home_widget_details || detailed_widget(id))
-            && inside(widget_resize_handle(r, s), x, y)
-        {
+        if ui.home.widgets.editing && inside(widget_resize_handle(r, s), x, y) {
             return Some(HomeHit::WidgetHandle(id));
         }
         if inside(r, x, y) {
-            if ui.cfg.home_widget_details
-                && !ui.home.widgets.editing
-                && r.3 - r.1 > 60.0 * s
-                && let Some((command, _)) = widget_command(id)
-            {
-                if inside(widget_command_rect(r, s), x, y) {
-                    return Some(HomeHit::WidgetCommand(command));
-                }
-                return None;
-            }
             return Some(HomeHit::Action(usize::from(id)));
         }
     }
@@ -293,11 +274,7 @@ pub fn widget_editor_controls(pill: Rect, s: f32, ui: &UiState) -> Vec<(Rect, Wi
     let width = card.2 - card.0;
     let mut out = Vec::new();
     if ui.home.widgets.selected.is_some() {
-        for (i, size) in WidgetSize::ALL.iter().enumerate().filter(|(_, size)| {
-            **size == WidgetSize::Tile
-                || !ui.cfg.home_widget_details
-                || ui.home.widgets.selected.is_some_and(detailed_widget)
-        }) {
+        for (i, size) in WidgetSize::ALL.iter().enumerate() {
             let (columns, column, row) = if i < 3 { (3.0, i as f32, 0.0) } else { (2.0, (i - 3) as f32, 1.0) };
             let step = (width - 24.0 * s) / columns;
             let x = card.0 + 12.0 * s + column * step;
@@ -366,8 +343,7 @@ fn paint_widget(p: &Painter, r: Rect, s: f32, ui: &UiState, id: u8, alpha: f32) 
         if selected {
             p.stroke_round_rect(r, 16.0 * s, s, acc(0.85))?;
         }
-        if paint_widget_details(p, r, s, ui, id)? {
-        } else if let Tile::Info(_, _, Info::Weather) = kind {
+        if let Tile::Info(_, _, Info::Weather) = kind {
             paint_weather_widget(p, r, s, ui)?;
         } else {
             let (glyph, title, value) = match kind {
@@ -414,7 +390,7 @@ fn paint_widget(p: &Painter, r: Rect, s: f32, ui: &UiState, id: u8, alpha: f32) 
                 }
             }
         }
-        if ui.home.widgets.editing && (!ui.cfg.home_widget_details || detailed_widget(id)) {
+        if ui.home.widgets.editing {
             p.glyph('\u{E784}', widget_resize_handle(r, s), 12.0 * s, acc(0.8))?;
         }
         Ok(())
@@ -580,9 +556,7 @@ fn paint_widget_editor_contents(p: &Painter, pill: Rect, s: f32, ui: &UiState) -
     {
         text(
             p,
-            if ui.cfg.home_widget_details && ui.home.widgets.selected.is_some_and(|id| !detailed_widget(id)) {
-                "This quick action stays compact. Add a data widget to resize."
-            } else if ui.home.widgets.status.is_empty() {
+            if ui.home.widgets.status.is_empty() {
                 "Drag tiles to arrange; pull a corner to resize"
             } else {
                 &ui.home.widgets.status
@@ -669,9 +643,8 @@ mod tests {
     fn horizontal_and_vertical_widgets_keep_the_same_expanded_bounds() {
         let mut ui = ui();
         ui.cfg.home_weather_widget = false;
-        ui.cfg.home_actions[0] = 8;
         for size in WidgetSize::ALL {
-            ui.cfg.home_widget_sizes.insert(8, size);
+            ui.cfg.home_widget_sizes.insert(0, size);
             for scale in [0.75, 1.0, 1.25, 1.5, 2.0] {
                 let pill = (0.0, 0.0, 640.0 * scale, 380.0 * scale);
                 let rects = home_widget_rects(pill, scale, &ui);

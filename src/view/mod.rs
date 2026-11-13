@@ -51,7 +51,6 @@ mod text;
 mod tips;
 mod wave_theme;
 mod weather;
-mod widget_details;
 mod widgets;
 mod yandex;
 
@@ -68,7 +67,6 @@ pub use home_widgets::*;
 pub use live::*;
 pub use memory_tools::*;
 pub use pet_studio::*;
-pub use widget_details::*;
 
 pub type Rect = (f32, f32, f32, f32);
 pub use wave_theme::{WaveColours, wave_colour};

@@ -308,6 +308,44 @@ pub fn fullscreen(monitor: &Monitor) -> bool {
     fullscreen_window(hwnd, monitor, exclusive)
 }
 
+pub fn foreground_summary() -> String {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        let mut class = [0u16; 64];
+        let n = GetClassNameW(hwnd, &mut class) as usize;
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        let mut rect = RECT::default();
+        let _ = GetWindowRect(hwnd, &mut rect);
+        format!(
+            "foreground class={} pid={pid} rect=({},{},{},{})",
+            String::from_utf16_lossy(&class[..n]),
+            rect.left,
+            rect.top,
+            rect.right,
+            rect.bottom
+        )
+    }
+}
+
+pub fn fullscreen_over(own: HWND) -> bool {
+    use windows::Win32::UI::Shell::{QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState};
+    let Some(hwnd) = foreground_app() else { return false };
+    let mut info = windows::Win32::Graphics::Gdi::MONITORINFO {
+        cbSize: size_of::<windows::Win32::Graphics::Gdi::MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let handle = unsafe {
+        windows::Win32::Graphics::Gdi::MonitorFromWindow(own, windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTONEAREST)
+    };
+    if !unsafe { GetMonitorInfoW(handle, &mut info) }.as_bool() {
+        return false;
+    }
+    let monitor = Monitor { device: String::new(), bounds: info.rcMonitor, work: info.rcWork, primary: false };
+    let exclusive = unsafe { SHQueryUserNotificationState() }.is_ok_and(|state| state == QUNS_RUNNING_D3D_FULL_SCREEN);
+    fullscreen_window(hwnd, &monitor, exclusive)
+}
+
 fn fullscreen_window(hwnd: HWND, monitor: &Monitor, exclusive: bool) -> bool {
     use windows::Win32::Graphics::Dwm::DWMWA_EXTENDED_FRAME_BOUNDS;
     unsafe {
