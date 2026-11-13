@@ -12,6 +12,7 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, SW_SHOWNORMAL, WM_APP};
 use windows::core::{HSTRING, PCWSTR, w};
 
+use crate::platform::gamepad::VirtualPad;
 use crate::platform::input_inject::{Injector, find_window, foreground_title_contains};
 use crate::tools::macro_script::{self, Button, Macro, Step};
 
@@ -135,6 +136,60 @@ pub fn delete(stem: &str) {
     }
 }
 
+const GUIDE: &str = include_str!("../../docs/macros.md");
+
+fn has_association(extension: &str) -> bool {
+    use windows::Win32::UI::Shell::{ASSOCF_NONE, ASSOCSTR_EXECUTABLE, AssocQueryStringW};
+    use windows::core::PWSTR;
+    let mut buffer = [0u16; 520];
+    let mut length = buffer.len() as u32;
+    unsafe {
+        AssocQueryStringW(
+            ASSOCF_NONE,
+            ASSOCSTR_EXECUTABLE,
+            &HSTRING::from(extension),
+            PCWSTR::null(),
+            Some(PWSTR(buffer.as_mut_ptr())),
+            &mut length,
+        )
+    }
+    .is_ok()
+}
+
+fn open_with_default(path: &std::path::Path) {
+    let extension = path.extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+    let file = HSTRING::from(path.to_string_lossy().as_ref());
+    unsafe {
+        if has_association(&extension) {
+            ShellExecuteW(None, w!("open"), &file, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
+        } else {
+            let quoted = HSTRING::from(format!("\"{}\"", path.display()));
+            ShellExecuteW(None, w!("open"), w!("notepad.exe"), &quoted, PCWSTR::null(), SW_SHOWNORMAL);
+        }
+    }
+}
+
+pub fn open_file(stem: &str) -> bool {
+    match path(stem).filter(|p| p.is_file()) {
+        Some(path) => {
+            open_with_default(&path);
+            true
+        }
+        None => false,
+    }
+}
+
+pub fn open_guide() -> bool {
+    let Some(dir) = dir() else { return false };
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("Guide.md");
+    if fs::read_to_string(&path).ok().as_deref() != Some(GUIDE) && fs::write(&path, GUIDE).is_err() {
+        return false;
+    }
+    open_with_default(&path);
+    true
+}
+
 pub fn open_folder() {
     if let Some(dir) = dir() {
         let _ = fs::create_dir_all(&dir);
@@ -248,6 +303,7 @@ pub fn stem_for_hotkey(id: i32) -> Option<String> {
 
 struct Runner<'a> {
     injector: Injector,
+    pad: Option<VirtualPad>,
     cancel: &'a AtomicBool,
     keys: Vec<u16>,
     buttons: Vec<Button>,
@@ -263,6 +319,7 @@ impl<'a> Runner<'a> {
             | 1;
         Self {
             injector: Injector::new(program.method, &program.target),
+            pad: None,
             cancel,
             keys: Vec::new(),
             buttons: Vec::new(),
@@ -403,6 +460,17 @@ impl<'a> Runner<'a> {
                     }
                 }
             }
+            Step::PadTap(mask) => {
+                self.pad()?.button(*mask, true);
+                if !self.sleep(50) {
+                    return Ok(false);
+                }
+                self.pad()?.button(*mask, false);
+            }
+            Step::PadDown(mask) => self.pad()?.button(*mask, true),
+            Step::PadUp(mask) => self.pad()?.button(*mask, false),
+            Step::PadStick { right, x, y } => self.pad()?.stick(*right, *x, *y),
+            Step::PadTrigger { right, value } => self.pad()?.trigger(*right, *value),
             Step::Loop { count, body } => {
                 if depth >= macro_script::MAX_DEPTH {
                     return Err("Blocks are nested too deeply".into());
@@ -425,6 +493,13 @@ impl<'a> Runner<'a> {
             }
         }
         Ok(true)
+    }
+
+    fn pad(&mut self) -> Result<&mut VirtualPad, String> {
+        if self.pad.is_none() {
+            self.pad = Some(VirtualPad::connect()?);
+        }
+        self.pad.as_mut().ok_or_else(|| "The virtual gamepad is missing".to_string())
     }
 
     fn press(&mut self, vk: u16, down: bool) {
@@ -456,12 +531,26 @@ impl<'a> Runner<'a> {
         for button in std::mem::take(&mut self.buttons) {
             self.injector.button(button, false);
         }
+        if let Some(pad) = self.pad.as_mut() {
+            pad.release_all();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_in_the_guide_parses() {
+        let examples = GUIDE.split("## Examples").nth(1).and_then(|s| s.split("## Troubleshooting").next()).unwrap();
+        let blocks: Vec<&str> = examples.split("```").skip(1).step_by(2).collect();
+        assert!(blocks.len() >= 8);
+        for block in blocks {
+            let program = macro_script::parse(block).unwrap_or_else(|why| panic!("{why}\n{block}"));
+            assert!(!program.steps.is_empty());
+        }
+    }
 
     #[test]
     fn file_names_are_made_safe() {

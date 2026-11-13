@@ -29,7 +29,8 @@ pub enum MacrosHit {
     Action(usize),
 }
 
-pub const MACRO_ACTIONS: [&str; 8] = ["Run", "Save", "Record", "Hotkey", "Method", "New", "Delete", "Folder"];
+pub const MACRO_ACTIONS: [&str; 10] =
+    ["Run", "Save", "Record", "Hotkey", "Method", "New", "Delete", "Folder", "Open", "Guide"];
 
 pub const ACT_RUN: usize = 0;
 pub const ACT_SAVE: usize = 1;
@@ -39,6 +40,8 @@ pub const ACT_METHOD: usize = 4;
 pub const ACT_NEW: usize = 5;
 pub const ACT_DELETE: usize = 6;
 pub const ACT_FOLDER: usize = 7;
+pub const ACT_OPEN: usize = 8;
+pub const ACT_GUIDE: usize = 9;
 
 pub const MACRO_FONT: f32 = 12.5;
 
@@ -81,9 +84,9 @@ fn buttons_top(pill: Rect, scale: f32) -> f32 {
 fn action_rect(pill: Rect, scale: f32, i: usize) -> Rect {
     let p = pane(pill, scale);
     let gap = GAP * scale;
-    let w = (p.2 - p.0 - 3.0 * gap) / 4.0;
-    let l = p.0 + (i % 4) as f32 * (w + gap);
-    let t = buttons_top(pill, scale) + (i / 4) as f32 * (BUTTON_H * scale + gap);
+    let w = (p.2 - p.0 - 4.0 * gap) / 5.0;
+    let l = p.0 + (i % 5) as f32 * (w + gap);
+    let t = buttons_top(pill, scale) + (i / 5) as f32 * (BUTTON_H * scale + gap);
     (l, t, l + w, t + BUTTON_H * scale)
 }
 

@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -29,6 +29,9 @@ pub enum Kind {
     Button { button: Button, down: bool },
     Move,
     Wheel(i32),
+    PadButton { mask: u16, down: bool },
+    PadStick { right: bool, x: i8, y: i8 },
+    PadTrigger { right: bool, value: u8 },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -42,6 +45,72 @@ pub struct Event {
 static MAIN: AtomicIsize = AtomicIsize::new(0);
 static THREAD: Mutex<Option<u32>> = Mutex::new(None);
 static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
+static POLLING: AtomicBool = AtomicBool::new(false);
+
+const STICK_DEADZONE: i32 = 7849;
+const PAD_CHANGE_PERCENT: i32 = 4;
+
+fn stick_percent(value: i16) -> i8 {
+    let v = value as i32;
+    if v.abs() < STICK_DEADZONE {
+        return 0;
+    }
+    (v * 100 / 32767).clamp(-100, 100) as i8
+}
+
+fn poll_pad() {
+    use windows::Win32::UI::Input::XboxController::{XINPUT_STATE, XInputGetState};
+    let mut last_buttons = 0u16;
+    let mut last_sticks = [0i8; 4];
+    let mut last_triggers = [0u8; 2];
+    while POLLING.load(Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_millis(8));
+        let mut state = XINPUT_STATE::default();
+        let connected = (0..4).any(|user| unsafe { XInputGetState(user, &mut state) } == 0);
+        if !connected {
+            continue;
+        }
+        let pad = state.Gamepad;
+        let buttons = pad.wButtons.0;
+        let changed = buttons ^ last_buttons;
+        if changed != 0 {
+            for bit in 0..16 {
+                let mask = 1u16 << bit;
+                if changed & mask != 0 && crate::tools::macro_script::PAD_BUTTONS.iter().any(|(_, m)| *m == mask) {
+                    push(Kind::PadButton { mask, down: buttons & mask != 0 }, 0, 0);
+                }
+            }
+            last_buttons = buttons;
+        }
+        let sticks = [
+            stick_percent(pad.sThumbLX),
+            stick_percent(pad.sThumbLY),
+            stick_percent(pad.sThumbRX),
+            stick_percent(pad.sThumbRY),
+        ];
+        for (side, right) in [(0usize, false), (2, true)] {
+            let moved = (sticks[side] as i32 - last_sticks[side] as i32).abs() >= PAD_CHANGE_PERCENT
+                || (sticks[side + 1] as i32 - last_sticks[side + 1] as i32).abs() >= PAD_CHANGE_PERCENT
+                || ((sticks[side] == 0 && sticks[side + 1] == 0)
+                    && (last_sticks[side] != 0 || last_sticks[side + 1] != 0));
+            if moved {
+                push(Kind::PadStick { right, x: sticks[side], y: sticks[side + 1] }, 0, 0);
+                last_sticks[side] = sticks[side];
+                last_sticks[side + 1] = sticks[side + 1];
+            }
+        }
+        let triggers =
+            [pad.bLeftTrigger, pad.bRightTrigger].map(|t| if t < 30 { 0 } else { (t as u32 * 100 / 255) as u8 });
+        for (i, right) in [(0usize, false), (1, true)] {
+            if (triggers[i] as i32 - last_triggers[i] as i32).abs() >= PAD_CHANGE_PERCENT
+                || (triggers[i] == 0 && last_triggers[i] != 0)
+            {
+                push(Kind::PadTrigger { right, value: triggers[i] }, 0, 0);
+                last_triggers[i] = triggers[i];
+            }
+        }
+    }
+}
 
 fn push(kind: Kind, x: i32, y: i32) {
     if let Ok(mut events) = EVENTS.lock()
@@ -145,10 +214,15 @@ pub fn start(main: HWND) -> bool {
         let _ = UnhookWindowsHookEx(mouse);
     });
     *thread = rx.recv().ok().flatten();
+    if thread.is_some() {
+        POLLING.store(true, Ordering::Relaxed);
+        std::thread::spawn(poll_pad);
+    }
     thread.is_some()
 }
 
 pub fn stop(trim_click: bool) -> Vec<Step> {
+    POLLING.store(false, Ordering::Relaxed);
     if let Ok(mut thread) = THREAD.lock()
         && let Some(id) = thread.take()
     {
@@ -245,6 +319,25 @@ pub fn to_steps(events: &[Event]) -> Vec<Step> {
                         }
                     }
                     Kind::Wheel(delta) => emit(&mut steps, &mut clock, event.at, Step::Wheel(delta)),
+                    Kind::PadButton { mask, down } => {
+                        let merged = !down
+                            && matches!(steps.last(), Some(Step::PadDown(last)) if *last == mask)
+                            && event.at.saturating_duration_since(clock) < Duration::from_millis(400);
+                        if merged {
+                            steps.pop();
+                            steps.push(Step::PadTap(mask));
+                            clock = event.at;
+                        } else {
+                            let step = if down { Step::PadDown(mask) } else { Step::PadUp(mask) };
+                            emit(&mut steps, &mut clock, event.at, step);
+                        }
+                    }
+                    Kind::PadStick { right, x, y } => {
+                        emit(&mut steps, &mut clock, event.at, Step::PadStick { right, x, y })
+                    }
+                    Kind::PadTrigger { right, value } => {
+                        emit(&mut steps, &mut clock, event.at, Step::PadTrigger { right, value })
+                    }
                     Kind::Move => {}
                 }
             }

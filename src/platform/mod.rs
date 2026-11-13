@@ -9,6 +9,7 @@ pub mod capture;
 pub mod dictation;
 pub mod dnd;
 pub mod downloads;
+pub mod gamepad;
 pub mod input_inject;
 pub mod input_record;
 pub mod localvoice;

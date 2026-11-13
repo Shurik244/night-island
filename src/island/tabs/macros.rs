@@ -184,6 +184,16 @@ impl App {
                 }
             }
             view::ACT_FOLDER => store::open_folder(),
+            view::ACT_OPEN => {
+                let Some(stem) = self.selected_stem() else { return };
+                self.save_macro_if_dirty();
+                if !store::open_file(&stem) {
+                    self.ui.macros.status = "Could not open the file".into();
+                }
+            }
+            view::ACT_GUIDE if !store::open_guide() => {
+                self.ui.macros.status = "Could not open the guide".into();
+            }
             _ => {}
         }
     }

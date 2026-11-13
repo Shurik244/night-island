@@ -92,6 +92,11 @@ pub enum Step {
     Wheel(i32),
     Run { target: String, args: String },
     WaitWindow { title: String, ms: u32 },
+    PadTap(u16),
+    PadDown(u16),
+    PadUp(u16),
+    PadStick { right: bool, x: i8, y: i8 },
+    PadTrigger { right: bool, value: u8 },
     Loop { count: u32, body: Vec<Step> },
     IfWindow { title: String, body: Vec<Step> },
 }
@@ -381,8 +386,71 @@ fn title_and_time(rest: &str) -> (String, Option<u32>) {
     (strip_quotes(rest).to_string(), None)
 }
 
+pub const PAD_BUTTONS: [(&str, u16); 15] = [
+    ("A", 0x1000),
+    ("B", 0x2000),
+    ("X", 0x4000),
+    ("Y", 0x8000),
+    ("LB", 0x0100),
+    ("RB", 0x0200),
+    ("Back", 0x0020),
+    ("Start", 0x0010),
+    ("LS", 0x0040),
+    ("RS", 0x0080),
+    ("Up", 0x0001),
+    ("Down", 0x0002),
+    ("Left", 0x0004),
+    ("Right", 0x0008),
+    ("Guide", 0x0400),
+];
+
+pub fn pad_button(name: &str) -> Option<u16> {
+    PAD_BUTTONS.iter().find(|(n, _)| n.eq_ignore_ascii_case(name.trim())).map(|(_, mask)| *mask)
+}
+
+pub fn pad_button_name(mask: u16) -> &'static str {
+    PAD_BUTTONS.iter().find(|(_, m)| *m == mask).map_or("A", |(n, _)| *n)
+}
+
+fn parse_side(text: &str) -> Result<bool, String> {
+    match text.to_ascii_lowercase().as_str() {
+        "left" | "l" => Ok(false),
+        "right" | "r" => Ok(true),
+        _ => Err("use left or right".into()),
+    }
+}
+
+fn parse_percent(text: &str, low: i32) -> Result<i32, String> {
+    let value: i32 =
+        text.trim().trim_end_matches('%').parse().map_err(|_| format!("\"{}\" is not a number", text.trim()))?;
+    if !(low..=100).contains(&value) {
+        return Err(format!("the value must be from {low} to 100"));
+    }
+    Ok(value)
+}
+
+fn parse_pad(rest: &str) -> Result<Step, String> {
+    let parts: Vec<&str> = rest.split_whitespace().collect();
+    let button = |name: &str| pad_button(name).ok_or_else(|| format!("unknown gamepad button \"{name}\""));
+    match parts.as_slice() {
+        [name] | ["press", name] | ["tap", name] => Ok(Step::PadTap(button(name)?)),
+        ["down", name] => Ok(Step::PadDown(button(name)?)),
+        ["up", name] => Ok(Step::PadUp(button(name)?)),
+        ["stick", side, x, y] => Ok(Step::PadStick {
+            right: parse_side(side)?,
+            x: parse_percent(x, -100)? as i8,
+            y: parse_percent(y, -100)? as i8,
+        }),
+        ["trigger", side, value] => {
+            Ok(Step::PadTrigger { right: parse_side(side)?, value: parse_percent(value, 0)? as u8 })
+        }
+        _ => Err("use: pad A, pad down A, pad up A, pad stick left X Y, pad trigger right N".into()),
+    }
+}
+
 fn parse_step(command: &str, rest: &str) -> Result<Step, String> {
     match command {
+        "pad" | "gamepad" => parse_pad(rest),
         "key" | "tap" | "press" => Ok(Step::Tap(parse_combo(rest)?)),
         "down" | "keydown" => Ok(Step::Down(parse_key_or_code(rest).ok_or_else(|| format!("unknown key \"{rest}\""))?)),
         "up" | "keyup" => Ok(Step::Up(parse_key_or_code(rest).ok_or_else(|| format!("unknown key \"{rest}\""))?)),
@@ -545,6 +613,15 @@ fn write_steps(out: &mut String, steps: &[Step], depth: usize) {
             Step::Run { target, args } if args.is_empty() => out.push_str(&format!("{pad}run \"{target}\"\n")),
             Step::Run { target, args } => out.push_str(&format!("{pad}run \"{target}\" {args}\n")),
             Step::WaitWindow { title, ms } => out.push_str(&format!("{pad}wait_window \"{title}\" {ms}\n")),
+            Step::PadTap(m) => out.push_str(&format!("{pad}pad {}\n", pad_button_name(*m))),
+            Step::PadDown(m) => out.push_str(&format!("{pad}pad down {}\n", pad_button_name(*m))),
+            Step::PadUp(m) => out.push_str(&format!("{pad}pad up {}\n", pad_button_name(*m))),
+            Step::PadStick { right, x, y } => {
+                out.push_str(&format!("{pad}pad stick {} {x} {y}\n", if *right { "right" } else { "left" }))
+            }
+            Step::PadTrigger { right, value } => {
+                out.push_str(&format!("{pad}pad trigger {} {value}\n", if *right { "right" } else { "left" }))
+            }
             Step::Loop { count, body } => {
                 let n = if *count == 0 { "forever".to_string() } else { count.to_string() };
                 out.push_str(&format!("{pad}loop {n}\n"));
@@ -611,7 +688,7 @@ pub fn set_header(text: &str, key: &str, value: &str) -> String {
     out
 }
 
-pub const TEMPLATE: &str = "name: New macro\nmethod: scan\nrepeat: 1\n\n# Commands: key Ctrl+C, down/up KEY, type TEXT, delay 100 or 50..150,\n# move X Y, move rel DX DY, click [left|right|middle] [X Y], mousedown/mouseup BUTTON,\n# wheel N, run \"program\" ARGS, wait_window \"Title\" MS, loop N ... end, if_window \"Title\" ... end\n\nkey Ctrl+C\ndelay 100\n";
+pub const TEMPLATE: &str = "name: New macro\nmethod: scan\nrepeat: 1\n\n# Commands: key Ctrl+C, down/up KEY, type TEXT, delay 100 or 50..150,\n# move X Y, move rel DX DY, click [left|right|middle] [X Y], mousedown/mouseup BUTTON,\n# pad A, pad down/up LB, pad stick left X Y (-100..100), pad trigger right N (0..100),\n# wheel N, run \"program\" ARGS, wait_window \"Title\" MS, loop N ... end, if_window \"Title\" ... end\n\nkey Ctrl+C\ndelay 100\n";
 
 #[cfg(test)]
 mod tests {
@@ -662,6 +739,18 @@ mod tests {
         assert_eq!(parse_duration("2s").unwrap(), 2000);
         assert_eq!(parse_duration("150ms").unwrap(), 150);
         assert!(parse_duration("99999999").is_err());
+    }
+
+    #[test]
+    fn gamepad_steps_round_trip() {
+        let text = "pad A\npad down LB\npad up LB\npad stick left 50 -100\npad trigger right 100\n";
+        let m = parse(text).unwrap();
+        assert_eq!(m.steps[0], Step::PadTap(0x1000));
+        assert_eq!(m.steps[3], Step::PadStick { right: false, x: 50, y: -100 });
+        assert_eq!(m.steps[4], Step::PadTrigger { right: true, value: 100 });
+        assert_eq!(parse(&to_text(&m)).unwrap(), m);
+        assert!(parse("pad stick left 500 0").is_err());
+        assert!(parse("pad Z").is_err());
     }
 
     #[test]
