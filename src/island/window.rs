@@ -463,6 +463,9 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
                 Some(Hotkey::Qr) => with_app(|a| a.capture(capture::Mode::Qr)),
                 Some(Hotkey::Rec) => with_app(|a| a.toggle_recording()),
                 Some(Hotkey::Dictate) => with_app(|a| a.toggle_dictation()),
+                None if wparam.0 as i32 >= crate::services::macros::HOTKEY_BASE => {
+                    with_app(|a| a.on_macro_hotkey(wparam.0 as i32))
+                }
                 _ => {}
             }
             LRESULT(0)
@@ -620,6 +623,14 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
         }
         ai::WM_SORT => {
             with_app(|a| a.on_sort());
+            LRESULT(0)
+        }
+        crate::services::macros::WM_MACRO => {
+            with_app(|a| a.on_macro_done());
+            LRESULT(0)
+        }
+        crate::platform::input_record::WM_RECORD_STOP => {
+            with_app(|a| a.on_record_stop());
             LRESULT(0)
         }
         crate::services::translate::WM_TRANSLATE => {

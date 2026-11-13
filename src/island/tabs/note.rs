@@ -23,6 +23,8 @@ impl App {
                 13.0
             } else if self.ui.tab == view::Tab::Agy {
                 view::AGY_FONT
+            } else if self.ui.tab == view::Tab::Macros {
+                view::MACRO_FONT
             } else {
                 view::NOTE_FONT
             } * self.scale,
@@ -81,6 +83,9 @@ impl App {
         }
         if self.ui.tab == view::Tab::Translate {
             self.schedule_translate();
+        }
+        if self.ui.tab == view::Tab::Macros {
+            self.macro_editor_changed();
         }
         self.ui.caret_on = true;
         if self.ui.editing {
@@ -616,7 +621,7 @@ impl App {
             return false;
         }
         if self.state != State::Expanded
-            || !matches!(self.ui.tab, view::Tab::Note | view::Tab::Text | view::Tab::Translate)
+            || !matches!(self.ui.tab, view::Tab::Note | view::Tab::Text | view::Tab::Translate | view::Tab::Macros)
         {
             return false;
         }
@@ -626,6 +631,7 @@ impl App {
             view::Tab::Note => view::note_frame_for(pill, self.scale, self.ui.notes.remind.is_some()).0,
             view::Tab::Text => view::text_frame(pill, self.scale).0,
             view::Tab::Translate => view::translate_field(pill, self.scale).0,
+            view::Tab::Macros => view::macro_field(pill, self.scale).0,
             _ => return false,
         };
         x >= frame.0 && x < frame.2 && y >= frame.1 && y < frame.3

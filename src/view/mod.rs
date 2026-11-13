@@ -31,6 +31,7 @@ mod home;
 mod home_widgets;
 mod integrations;
 mod live;
+mod macros;
 mod memory_tools;
 mod metrics;
 mod mixer;
@@ -66,6 +67,7 @@ pub use self::{
 pub use guide::*;
 pub use home_widgets::*;
 pub use live::*;
+pub use macros::*;
 pub use memory_tools::*;
 pub use pet_studio::*;
 
@@ -91,10 +93,11 @@ pub enum Tab {
     Notifications,
     Yandex,
     Translate,
+    Macros,
     Settings,
 }
 
-pub const TABS: [(Tab, char, &str); 18] = [
+pub const TABS: [(Tab, char, &str); 19] = [
     (Tab::Home, '\u{E80F}', "Home"),
     (Tab::Clipboard, '\u{E77F}', "Clipboard"),
     (Tab::Text, '\u{E8E9}', "Text"),
@@ -112,6 +115,7 @@ pub const TABS: [(Tab, char, &str); 18] = [
     (Tab::Notifications, '\u{EA8F}', "Notifications"),
     (Tab::Yandex, crate::ui::icons::YANDEX_MUSIC_GLYPH, "My Wave"),
     (Tab::Translate, '\u{E775}', "Translate"),
+    (Tab::Macros, '\u{E768}', "Macros"),
     (Tab::Settings, '\u{E713}', "Settings"),
 ];
 
@@ -174,6 +178,7 @@ pub struct UiState {
     pub cfg: Settings,
     pub text: TextUi,
     pub translate: TranslateUi,
+    pub macros: MacrosUi,
     pub editing: bool,
     pub caret_on: bool,
     pub media: Media,
@@ -242,6 +247,7 @@ impl UiState {
             int: IntegrationsUi::default(),
             text: TextUi::default(),
             translate: TranslateUi::default(),
+            macros: MacrosUi::default(),
             clip: ClipUi::default(),
             city: CityUi::default(),
             home: HomeUi::default(),

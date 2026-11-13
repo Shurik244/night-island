@@ -139,6 +139,7 @@ pub fn run() -> Result<()> {
         if !failed.is_empty() {
             crate::log_warn!("hotkeys taken by another program: {failed:?}");
         }
+        with_app(|app| app.reload_macros(None));
         #[cfg(feature = "demo")]
         demo::apply(hwnd);
         apps::start_indexing();

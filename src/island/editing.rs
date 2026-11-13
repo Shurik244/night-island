@@ -9,6 +9,8 @@ impl App {
             view::text_frame(pill, self.scale)
         } else if self.ui.tab == view::Tab::Translate {
             view::translate_field(pill, self.scale)
+        } else if self.ui.tab == view::Tab::Macros {
+            view::macro_field(pill, self.scale)
         } else if self.ui.tab == view::Tab::Agy {
             view::agy_input(pill, self.scale, self.ui.agy.input_h.get())
         } else if self.ui.tab == view::Tab::Chat {
@@ -25,6 +27,7 @@ impl App {
         match self.ui.tab {
             view::Tab::Text => &self.ui.text.input,
             view::Tab::Translate => &self.ui.translate.input,
+            view::Tab::Macros => &self.ui.macros.editor,
             view::Tab::Agy => &self.ui.agy.input,
             view::Tab::Chat => &self.ui.chat.input,
             view::Tab::Note if self.ui.notes.renaming.is_some() => &self.ui.notes.name_input,
@@ -36,6 +39,7 @@ impl App {
         match self.ui.tab {
             view::Tab::Text => &mut self.ui.text.input,
             view::Tab::Translate => &mut self.ui.translate.input,
+            view::Tab::Macros => &mut self.ui.macros.editor,
             view::Tab::Agy => &mut self.ui.agy.input,
             view::Tab::Chat => &mut self.ui.chat.input,
             view::Tab::Note if self.ui.notes.renaming.is_some() => &mut self.ui.notes.name_input,
@@ -74,6 +78,7 @@ impl App {
         self.kill_timer(Timer::Caret);
         self.finish_rename(true);
         self.save_note();
+        self.save_macro_if_dirty();
         unsafe {
             let ex = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
             SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE.0 as isize);
@@ -209,6 +214,9 @@ impl App {
             self.close_home_mixer();
             self.repaint_expanded();
             return;
+        }
+        if self.ui.macros.capture && self.ui.tab == view::Tab::Macros {
+            return self.capture_macro_hotkey(vk);
         }
         if !self.ui.editing {
             if vk == VK_ESCAPE.0 {

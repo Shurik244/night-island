@@ -272,6 +272,11 @@ impl App {
         } else {
             None
         };
+        let hover_macros = if self.ui.tab == view::Tab::Macros {
+            view::hit_macros(pill, self.scale, fx, fy, &self.ui.macros)
+        } else {
+            None
+        };
         let hover_act = if self.ui.tab == view::Tab::Home && self.ui.home.dev_menu.is_some() {
             let count = self.ui.home.dev_menu.as_ref().map_or(0, |m| m.0.len());
             match view::hit_menu(pill, self.scale, fx, fy, count, view::home_wide(&self.ui)) {
@@ -410,8 +415,10 @@ impl App {
             || hover_ctl != self.ui.hover_ctl
             || hover_text != self.ui.text.hover
             || hover_translate != self.ui.translate.hover
+            || hover_macros != self.ui.macros.hover
             || hover_note != self.ui.notes.hover
         {
+            self.ui.macros.hover = hover_macros;
             self.ui.notes.hover = hover_note;
             self.ui.text.hover = hover_text;
             self.ui.translate.hover = hover_translate;
@@ -543,6 +550,7 @@ impl App {
             view::Tab::Note => self.click_note(x, y),
             view::Tab::Text => self.click_text(x, y),
             view::Tab::Translate => self.click_translate(x, y),
+            view::Tab::Macros => self.click_macros(x, y),
             view::Tab::Record => self.click_record(x, y),
             view::Tab::Home => self.click_home(x, y),
             view::Tab::Weather => self.click_weather(x, y),
@@ -679,7 +687,22 @@ impl App {
             self.repaint_expanded();
             return;
         }
-        if matches!(self.ui.tab, view::Tab::Note | view::Tab::Text | view::Tab::Translate) {
+        if self.ui.tab == view::Tab::Macros
+            && let Some((x, y)) = self.cursor_client()
+            && view::over_macro_list(self.pill_rect(true), self.scale, x, y)
+        {
+            let fit = view::macro_rows_fit(self.pill_rect(true), self.scale);
+            let max = self.ui.macros.rows.len().saturating_sub(fit);
+            let scroll = &mut self.ui.macros.scroll;
+            let next = if delta > 0 { scroll.saturating_sub(1) } else { (*scroll + 1).min(max) };
+            if next != *scroll {
+                *scroll = next;
+                self.ui.macros.hover = None;
+                self.repaint_expanded();
+            }
+            return;
+        }
+        if matches!(self.ui.tab, view::Tab::Note | view::Tab::Text | view::Tab::Translate | view::Tab::Macros) {
             let Some(layout) = self.note_layout() else { return };
             let inner = self.note_inner();
             let max = (edit::content_height(&layout) - (inner.3 - inner.1)).max(0.0);
@@ -832,6 +855,7 @@ impl App {
             | self.ui.hover_ctl.take().is_some()
             | self.ui.text.hover.take().is_some()
             | self.ui.translate.hover.take().is_some()
+            | self.ui.macros.hover.take().is_some()
             | self.ui.notes.hover.take().is_some()
             | self.ui.home.hover_act.take().is_some()
             | self.ui.hover_head.take().is_some();
