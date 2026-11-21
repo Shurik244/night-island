@@ -43,7 +43,7 @@ impl PetPerformance {
                 if sleeping {
                     5
                 } else if active {
-                    30
+                    24
                 } else if detached {
                     10
                 } else {
