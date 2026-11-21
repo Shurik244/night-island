@@ -566,6 +566,12 @@ impl App {
         let pose = characters::Pose { t, reaction, look, blink: blink && !still, accent, beat, motion };
         let settling =
             [motion.behavior.sit, motion.behavior.sleep].iter().any(|value| *value > 0.005 && *value < 0.995);
+        let away_pause =
+            if Self::user_away() && !speech_cue.engaged() && !urgent && !pet_card && self.pet.returning.is_none() {
+                1000
+            } else {
+                0
+            };
         let performance = match self.settings.pet_performance {
             crate::ui::pet_motion::PetPerformance::Still => crate::ui::pet_motion::PetPerformance::Still,
             _ if self.eco() => crate::ui::pet_motion::PetPerformance::Eco,
@@ -627,7 +633,7 @@ impl App {
                 Err(error) => crate::log_warn!("could not draw character: {error}"),
             }
         }
-        self.set_timer(Timer::Char, interval);
+        self.set_timer(Timer::Char, interval.max(away_pause));
         self.maybe_show_notification();
     }
 }
