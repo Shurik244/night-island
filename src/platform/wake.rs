@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_float, c_void};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_WITH_ALTERED_SEARCH_PATH, LoadLibraryExW};
@@ -11,6 +12,7 @@ use windows::core::{HSTRING, PCSTR};
 use crate::platform::dictation;
 
 pub const WM_WAKE: u32 = WM_APP + 80;
+pub const WM_WAKE_STATUS: u32 = WM_APP + 112;
 
 pub const RUNTIME_VERSION: &str = "1.13.5";
 const SCORE: f32 = 3.2;
@@ -29,7 +31,40 @@ pub const FILES: [&str; 6] = [
 ];
 
 static LISTENING: AtomicBool = AtomicBool::new(false);
-static WANTED: AtomicBool = AtomicBool::new(false);
+static REVISION: AtomicU64 = AtomicU64::new(0);
+static CONTROL: Mutex<Control> = Mutex::new(Control { request: None, running: false });
+static STATUS: Mutex<Option<(u64, Result<(), String>)>> = Mutex::new(None);
+
+#[derive(Clone)]
+struct Request {
+    root: PathBuf,
+    words: Vec<String>,
+    hwnd: isize,
+    revision: u64,
+}
+struct Control {
+    request: Option<Request>,
+    running: bool,
+}
+impl Control {
+    fn replace(&mut self, request: Request) -> bool {
+        self.request = Some(request);
+        if self.running {
+            false
+        } else {
+            self.running = true;
+            true
+        }
+    }
+    fn finish(&mut self, revision: u64) -> bool {
+        if self.request.as_ref().is_some_and(|r| r.revision != revision) {
+            return true;
+        }
+        self.running = false;
+        self.request = None;
+        false
+    }
+}
 static PAUSED: AtomicBool = AtomicBool::new(false);
 
 pub fn dir() -> Option<PathBuf> {
@@ -42,6 +77,10 @@ pub fn installed_in(root: &Path) -> bool {
 
 pub fn installed() -> bool {
     dir().is_some_and(|d| installed_in(&d))
+}
+
+pub fn current_revision(revision: u64) -> bool {
+    REVISION.load(Ordering::Acquire) == revision
 }
 
 pub fn listening() -> bool {
@@ -359,54 +398,108 @@ pub fn rms(samples: &[f32]) -> f32 {
     (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
 }
 
+fn report(request: &Request, result: Result<(), String>) {
+    if REVISION.load(Ordering::Acquire) != request.revision {
+        return;
+    }
+    *STATUS.lock().unwrap_or_else(|e| e.into_inner()) = Some((request.revision, result));
+    unsafe {
+        let _ = PostMessageW(Some(HWND(request.hwnd as *mut c_void)), WM_WAKE_STATUS, WPARAM(0), LPARAM(0));
+    }
+}
+
+pub fn take_status() -> Option<Result<(), String>> {
+    STATUS
+        .lock()
+        .ok()?
+        .take()
+        .filter(|(revision, _)| *revision == REVISION.load(Ordering::Acquire))
+        .map(|(_, result)| result)
+}
+
+fn listen(request: &Request) -> Result<(), String> {
+    let vocab = std::fs::read_to_string(request.root.join("model/tokens.txt"))
+        .map(|t| load_vocab(&t))
+        .map_err(|_| "Could not read the wake-word vocabulary")?;
+    let keywords = keywords_text(&request.words, &vocab);
+    if keywords.is_empty() {
+        return Err("This name cannot be recognized. Try another name.".into());
+    }
+    let mut detector = Detector::new(&request.root, &keywords).ok_or("Could not load the wake-word model")?;
+    let mut was_paused = false;
+    report(request, Ok(()));
+    dictation::stream(|chunk| {
+        if REVISION.load(Ordering::Acquire) != request.revision {
+            return false;
+        }
+        if PAUSED.load(Ordering::SeqCst) {
+            was_paused = true;
+            return true;
+        }
+        if was_paused {
+            was_paused = false;
+            detector.clear();
+        }
+        if detector.feed(chunk) && REVISION.load(Ordering::Acquire) == request.revision {
+            PAUSED.store(true, Ordering::SeqCst);
+            unsafe {
+                let _ = PostMessageW(
+                    Some(HWND(request.hwnd as *mut c_void)),
+                    WM_WAKE,
+                    WPARAM(request.revision as usize),
+                    LPARAM(0),
+                );
+            }
+        }
+        true
+    })
+    .map_err(|_| "The microphone is unavailable. Check the recording device.".into())
+}
+
 pub fn start(hwnd: HWND, wake_words: Vec<String>) -> bool {
     let Some(root) = dir().filter(|d| installed_in(d)) else { return false };
-    for _ in 0..40 {
-        if !LISTENING.load(Ordering::SeqCst) || WANTED.load(Ordering::SeqCst) {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    if LISTENING.swap(true, Ordering::SeqCst) {
+    let mut control = CONTROL.lock().unwrap_or_else(|e| e.into_inner());
+    if control.request.as_ref().is_some_and(|r| r.words == wake_words && r.hwnd == hwnd.0 as isize) {
         return true;
     }
-    WANTED.store(true, Ordering::SeqCst);
+    let revision = REVISION.fetch_add(1, Ordering::AcqRel) + 1;
+    let spawn = control.replace(Request { root, words: wake_words, hwnd: hwnd.0 as isize, revision });
     PAUSED.store(false, Ordering::SeqCst);
-    let raw = hwnd.0 as isize;
-    std::thread::spawn(move || {
-        let vocab = std::fs::read_to_string(root.join("model/tokens.txt")).map(|t| load_vocab(&t)).unwrap_or_default();
-        let keywords = keywords_text(&wake_words, &vocab);
-        if let Some(mut detector) = Detector::new(&root, &keywords).filter(|_| !keywords.is_empty()) {
-            let mut was_paused = false;
-            let _ = dictation::stream(|chunk| {
-                if !WANTED.load(Ordering::SeqCst) {
-                    return false;
-                }
-                let paused = PAUSED.load(Ordering::SeqCst);
-                if paused {
-                    was_paused = true;
-                    return true;
-                }
-                if was_paused {
-                    was_paused = false;
-                    detector.clear();
-                }
-                if detector.feed(chunk) {
-                    PAUSED.store(true, Ordering::SeqCst);
-                    unsafe {
-                        let _ = PostMessageW(Some(HWND(raw as *mut c_void)), WM_WAKE, WPARAM(0), LPARAM(0));
+    if !spawn {
+        return true;
+    }
+    LISTENING.store(true, Ordering::SeqCst);
+    drop(control);
+    std::thread::spawn(|| {
+        loop {
+            let request = {
+                let mut control = CONTROL.lock().unwrap_or_else(|e| e.into_inner());
+                match control.request.clone() {
+                    Some(request) => request,
+                    None => {
+                        control.running = false;
+                        LISTENING.store(false, Ordering::SeqCst);
+                        return;
                     }
                 }
-                true
-            });
+            };
+            if let Err(why) = listen(&request) {
+                report(&request, Err(why));
+            }
+            let mut control = CONTROL.lock().unwrap_or_else(|e| e.into_inner());
+            if !control.finish(request.revision) {
+                LISTENING.store(false, Ordering::SeqCst);
+                return;
+            }
         }
-        LISTENING.store(false, Ordering::SeqCst);
     });
     true
 }
 
 pub fn stop() {
-    WANTED.store(false, Ordering::SeqCst);
+    let mut control = CONTROL.lock().unwrap_or_else(|e| e.into_inner());
+    control.request = None;
+    REVISION.fetch_add(1, Ordering::AcqRel);
 }
 
 pub fn pause() {
@@ -421,6 +514,33 @@ pub fn resume() {
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "Loads the installed keyword model with different names; does not open a microphone"]
+    fn installed_keyword_model_can_reload_with_a_new_name() {
+        let root = dir().expect("Profile directory");
+        let tokens = std::fs::read_to_string(root.join("model/tokens.txt")).unwrap();
+        let vocab = load_vocab(&tokens);
+        for name in ["Island", "Нова", "Айленд"] {
+            let keywords = keywords_text(&[name.into()], &vocab);
+            assert!(!keywords.is_empty());
+            let mut detector = Detector::new(&root, &keywords).expect("Keyword model should reload for every name");
+            assert!(!detector.feed(&[0; 480]));
+        }
+    }
+    #[test]
+    fn a_new_name_is_not_lost_while_the_previous_listener_is_stopping() {
+        let request =
+            |revision: u64| Request { root: PathBuf::new(), words: vec![revision.to_string()], hwnd: 0, revision };
+        let mut state = Control { request: None, running: false };
+        assert!(state.replace(request(1)));
+        state.request = None;
+        assert!(!state.replace(request(2)));
+        assert!(state.finish(1));
+        assert_eq!(state.request.as_ref().unwrap().words, ["2"]);
+        assert!(state.running);
+        assert!(!state.finish(2));
+        assert!(state.replace(request(3)));
+    }
     fn vocab() -> HashMap<String, ()> {
         load_vocab("<blk> 0\n▁х 1\nей 2\n▁а 3\nй 4\nле 5\nн 6\nд 7\n▁и 8\n▁э 9\nл 10\nа 11\nс 12\n▁ис 13\nла 14\n")
     }

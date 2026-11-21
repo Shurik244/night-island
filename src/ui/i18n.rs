@@ -28,6 +28,68 @@ pub fn is_ru() -> bool {
 
 fn phrase(s: &str) -> Option<&'static str> {
     Some(match s {
+        "Last active app" => "Последняя активная программа",
+        "Your app rules" => "Ваши правила для программ",
+        "Without an AI key, built-in rules and your own rules still work." => {
+            "Без ключа ИИ работают встроенные и ваши правила."
+        }
+        "Set up the AI model" => "Настроить модель ИИ",
+        "Checking sends one small test request to the selected model." => {
+            "Проверка отправляет небольшой запрос выбранной модели."
+        }
+        "Detailed tool widgets" => "Подробные виджеты инструментов",
+        "This quick action stays compact. Add a data widget to resize." => {
+            "Эта команда остаётся кнопкой. Для размера выберите виджет данных."
+        }
+        "Start recording" => "Начать запись",
+        "Open reminders" => "Напоминания",
+        "Open Steam" => "Открыть Steam",
+        "Ready to record" => "Готово к записи",
+        "No upcoming reminders" => "Нет ближайших напоминаний",
+        "No game running" => "Игра не запущена",
+        "No active sessions" => "Нет активных сессий",
+        "Status unavailable" => "Статус недоступен",
+        "Learn unknown apps with AI" => "Определять незнакомые приложения через ИИ",
+        "Hide in windowed games too" => "Скрывать остров и в оконных играх",
+        "AI sees only the executable name and product description." => {
+            "ИИ получает только имя программы и описание из её файла."
+        }
+        "No window titles, screenshots or full paths are sent." => {
+            "Заголовки окон, снимки и полные пути не отправляются."
+        }
+        "Unknown apps stay visible until classified. Desktop and Island windows are never games." => {
+            "В незнакомых программах остров виден до проверки. Рабочий стол всегда исключён."
+        }
+        "Always show the island in this app" => "Всегда показывать остров в этой программе",
+        "Treat this app as a game" => "Считать эту программу игрой",
+        "Recognize this app automatically" => "Определять эту программу автоматически",
+        "Game: your rule" => "Игра — ваше правило",
+        "App: your rule" => "Программа — ваше правило",
+        "App: built-in rule" => "Программа — встроенное правило",
+        "Game: built-in rule" => "Игра — встроенное правило",
+        "Game: learned" => "Игра — запомнено",
+        "App: learned" => "Программа — запомнено",
+        "Checking this app with AI…" => "ИИ определяет тип программы…",
+        "Unknown app: island stays visible" => "Тип неизвестен — остров остаётся видимым",
+        "App" => "Программа",
+        "Game" => "Игра",
+        "Test the connection after saving" => "Проверять подключение после сохранения",
+        "Save and check" => "Сохранить и проверить",
+        "Checking key, model and server…" => "Проверяю ключ, модель и сервер…",
+        "Checking connection…" => "Проверка подключения…",
+        "Connection verified" => "Подключение проверено",
+        "Key saved; connection not verified" => "Ключ сохранён, подключение ещё не проверено",
+        "Connection verified. The model answered." => "Подключение работает. Модель ответила на проверку.",
+        "Check connection" => "Проверить подключение",
+        "This name cannot be recognized. Try another name." => "Модель не может распознать это имя. Попробуйте другое.",
+        "Could not read the wake-word vocabulary" => "Не удалось прочитать словарь голосовой модели",
+        "Could not load the wake-word model" => "Не удалось загрузить модель слова-вызова",
+        "The microphone is unavailable. Check the recording device." => {
+            "Микрофон недоступен. Проверьте устройство записи."
+        }
+        "AC power" => "От сети",
+        "Please wait…" => "Подождите…",
+
         "Keep music covers on this computer" => "Сохранять обложки музыки на компьютере",
         "Drag tiles to arrange; pull a corner to resize" => "Перетаскивайте плитки; тяните за угол для размера",
         "Search" => "Поиск",
