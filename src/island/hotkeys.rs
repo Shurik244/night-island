@@ -32,12 +32,9 @@ pub(in crate::island) fn unregister_hotkeys(hwnd: HWND) {
     }
 }
 
-pub(in crate::island) fn fullscreen_app_in_front(own: HWND) -> bool {
-    crate::platform::desktop_dock::fullscreen_over(own)
-}
-
 impl App {
     pub(in crate::island) fn start_game_watch(&mut self) {
+        crate::platform::game_mode::configure(self.settings.game_mode && self.settings.game_ai);
         if self.settings.game_mode {
             winevent::start(self.hwnd);
             self.set_timer(Timer::Game, GAME_POLL_MS);
@@ -68,7 +65,10 @@ impl App {
         if !self.settings.game_mode {
             return;
         }
-        let gaming = self.state != State::Expanded && fullscreen_app_in_front(self.hwnd);
+        let gaming = crate::platform::game_mode::foreground().is_some_and(|probe| {
+            let game = crate::platform::game_mode::is_game(&probe, self.settings.game_ai, self.hwnd);
+            self.state != State::Expanded && game && (probe.fullscreen || self.settings.game_windowed)
+        });
         self.set_gaming(gaming);
         let looks = SETTLE_LOOKS.load(std::sync::atomic::Ordering::Relaxed);
         if looks > 0 {
