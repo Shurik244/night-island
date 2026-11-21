@@ -155,6 +155,10 @@ impl Timer {
     }
 }
 
+pub(in crate::island) fn timer_name(id: usize) -> String {
+    Timer::from_id(id).map_or_else(|| format!("#{id}"), |t| format!("{t:?}"))
+}
+
 impl App {
     pub(in crate::island) fn kill_timer(&self, timer: Timer) {
         if matches!(timer, Timer::Expand) {

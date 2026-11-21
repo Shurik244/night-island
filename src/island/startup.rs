@@ -173,7 +173,13 @@ pub fn run() -> Result<()> {
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+            if super::profile::on() {
+                let started = Instant::now();
+                DispatchMessageW(&msg);
+                super::profile::dispatch(&msg, started.elapsed());
+            } else {
+                DispatchMessageW(&msg);
+            }
         }
     }
     Ok(())

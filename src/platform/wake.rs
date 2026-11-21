@@ -18,7 +18,8 @@ pub const RUNTIME_VERSION: &str = "1.13.5";
 const SCORE: f32 = 3.2;
 const THRESHOLD: f32 = 0.09;
 const GATE_RMS: f32 = 0.003;
-const HANGOVER_CHUNKS: u32 = 36;
+const HANGOVER_SAMPLES: usize = 17_280;
+const LISTEN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(80);
 const SAMPLE_RATE: i32 = 16_000;
 
 pub const FILES: [&str; 6] = [
@@ -305,7 +306,7 @@ struct Detector {
     api: Api,
     spotter: *const Spotter,
     stream: *const Stream,
-    hangover: u32,
+    hangover: usize,
 }
 
 impl Detector {
@@ -351,14 +352,14 @@ impl Detector {
     }
 
     fn feed(&mut self, chunk: &[i16]) -> bool {
-        let floats: Vec<f32> = chunk.iter().map(|&s| f32::from(s) / 32768.0).collect();
-        if rms(&floats) >= GATE_RMS {
-            self.hangover = HANGOVER_CHUNKS;
+        if rms_i16(chunk) >= GATE_RMS {
+            self.hangover = HANGOVER_SAMPLES;
         } else if self.hangover > 0 {
-            self.hangover -= 1;
+            self.hangover = self.hangover.saturating_sub(chunk.len());
         } else {
             return false;
         }
+        let floats: Vec<f32> = chunk.iter().map(|&s| f32::from(s) / 32768.0).collect();
         unsafe {
             (self.api.accept)(self.stream, SAMPLE_RATE, floats.as_ptr(), floats.len() as i32);
             while (self.api.ready)(self.spotter, self.stream) != 0 {
@@ -391,11 +392,12 @@ impl Drop for Detector {
     }
 }
 
-pub fn rms(samples: &[f32]) -> f32 {
+fn rms_i16(samples: &[i16]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
-    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+    let sum: f64 = samples.iter().map(|&s| f64::from(s) * f64::from(s)).sum();
+    ((sum / samples.len() as f64).sqrt() / 32768.0) as f32
 }
 
 fn report(request: &Request, result: Result<(), String>) {
@@ -428,7 +430,7 @@ fn listen(request: &Request) -> Result<(), String> {
     let mut detector = Detector::new(&request.root, &keywords).ok_or("Could not load the wake-word model")?;
     let mut was_paused = false;
     report(request, Ok(()));
-    dictation::stream(|chunk| {
+    dictation::stream_every(LISTEN_INTERVAL, |chunk| {
         if REVISION.load(Ordering::Acquire) != request.revision {
             return false;
         }
@@ -578,9 +580,10 @@ mod tests {
 
     #[test]
     fn the_energy_gate_tells_silence_from_speech() {
-        assert!(rms(&[0.0; 480]) < GATE_RMS);
-        assert!(rms(&[0.05; 480]) > GATE_RMS);
-        assert_eq!(rms(&[]), 0.0);
+        assert!(rms_i16(&[0; 480]) < GATE_RMS);
+        assert!(rms_i16(&[1640; 480]) > GATE_RMS);
+        assert!((rms_i16(&[16384; 100]) - 0.5).abs() < 0.001);
+        assert_eq!(rms_i16(&[]), 0.0);
     }
 
     #[test]

@@ -1585,6 +1585,24 @@ impl TopPanel {
         self.reservation.as_ref().map_or(self.monitor.work.top, |r| r.rect().top) as f32
     }
 
+    pub fn idle_hidden(&self, island: Rect) -> bool {
+        if !self.settings.auto_hide || self.revealed || self.shown || self.animating() {
+            return false;
+        }
+        let mut point = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut point);
+        }
+        let at_edge = point.x >= self.monitor.bounds.left
+            && point.x < self.monitor.bounds.right
+            && point.y >= self.monitor.bounds.top
+            && point.y <= self.monitor.bounds.top + 3;
+        let over_island =
+            self.settings.entrance == PanelEntrance::Island && inside(island, (point.x as f32, point.y as f32));
+        let interacting = self.card.state.pressed.is_some() || crate::platform::system_tray::is_open();
+        !(at_edge || over_island || interacting)
+    }
+
     pub fn update(&mut self, snapshot: Snapshot, island: Rect, hidden: bool) {
         let active_changed =
             snapshot.active.as_ref().map(|w| w.handle) != self.snapshot.active.as_ref().map(|w| w.handle);

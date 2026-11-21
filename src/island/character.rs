@@ -471,6 +471,7 @@ impl App {
         let urgent = self.ui.remind.alert.is_some() || self.pet.reaction_until.is_some_and(|(_, until)| now < until);
         let pet_card = self.pet_notification_visible();
         let behavior = self.pet.desktop.as_ref().map(|desktop| {
+            let _span = super::profile::span(3);
             self.pet.behavior.advance(&crate::ui::pet_behavior::Environment {
                 dt,
                 enabled: self.settings.pet_autonomy && self.pet.returning.is_none(),
@@ -603,8 +604,10 @@ impl App {
         let key = (reaction, pose.blink, color, if still { 0 } else { self.pet.frame });
         if self.pet.char_key != Some(key) {
             let drawn = if let Some(desktop) = &mut self.pet.desktop {
+                let _span = super::profile::span(1);
                 desktop.render_designed(&self.gpu, character, &pose, self.scale, Some(&self.settings.custom_pet))
             } else {
+                let _span = super::profile::span(2);
                 self.pet.char_layer.paint(&self.gpu, |p| {
                     let draw = if self.settings.pill_unified_layout {
                         characters::draw_attached

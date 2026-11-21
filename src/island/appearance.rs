@@ -1,5 +1,8 @@
 use crate::island::*;
 
+const WEATHER_FRAME_MS_PILL: u32 = 100;
+const WEATHER_FRAME_MS_OPEN: u32 = 50;
+
 pub(crate) fn set_host_backdrop(hwnd: HWND, enabled: bool) {
     #[repr(C)]
     struct AccentPolicy {
@@ -191,7 +194,8 @@ impl App {
 
     pub(in crate::island) fn update_weather_timer(&self) {
         if self.weather_animating() {
-            self.set_timer(Timer::Weather, self.frame_ms());
+            let slowest = if self.state == State::Expanded { WEATHER_FRAME_MS_OPEN } else { WEATHER_FRAME_MS_PILL };
+            self.set_timer(Timer::Weather, self.frame_ms().max(slowest));
         } else {
             self.kill_timer(Timer::Weather);
         }

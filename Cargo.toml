@@ -121,6 +121,12 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+[profile.quick]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+
 [profile.dev.package.windows]
 debug = 0
 

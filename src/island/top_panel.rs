@@ -2,6 +2,8 @@ use crate::island::*;
 use crate::platform::desktop_dock as desktop;
 use crate::ui::top_panel::{Block, Request, TopPanel};
 
+const TOP_PANEL_HIDDEN_MS: u32 = 120;
+
 impl App {
     pub(in crate::island) fn interacting_with_top_panel(&self) -> bool {
         let Some(panel) = &self.top_panel else { return false };
@@ -50,6 +52,15 @@ impl App {
         let suppressed = self.top_panel.as_ref().is_some_and(|panel| panel.suppressed());
         let animating = self.top_panel.as_ref().is_some_and(|panel| panel.animating())
             || self.open_motion.as_ref().is_some_and(|motion| motion.progress.active(Instant::now()));
+        if !force && !suppressed && !animating {
+            let (x, y, w, h) = self.pill_screen(self.state == State::Expanded);
+            let island = (x, y, x + w, y + h);
+            if self.notification_occupied_rect().is_none()
+                && self.top_panel.as_ref().is_some_and(|panel| panel.idle_hidden(island))
+            {
+                return self.set_timer(Timer::TopPanel, TOP_PANEL_HIDDEN_MS);
+            }
+        }
         let mut snapshot = self.top_panel_data.clone();
         if !suppressed && !animating && (force || self.top_panel_poll.elapsed() >= Duration::from_secs(1)) {
             self.top_panel_poll = Instant::now();
