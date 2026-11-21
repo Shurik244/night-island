@@ -10,13 +10,14 @@ pub struct Group {
     pub(in crate::view) sections: &'static [(usize, &'static str)],
 }
 
-const GENERAL: [(Sid, &str, Kind); 10] = [
+const GENERAL: [(Sid, &str, Kind); 11] = [
     (Sid::Language, "Language", Kind::Segment(["Русский", "English"])),
     (Sid::Weather, "Weather", Kind::Toggle),
     (Sid::Autostart, "Start with Windows", Kind::Toggle),
     (Sid::GameMode, "Game mode", Kind::Toggle),
     (Sid::AutoHide, "Auto-hide", Kind::Toggle),
     (Sid::LockDrag, "Lock dragging", Kind::Toggle),
+    (Sid::AutoEco, "Save power on battery", Kind::Toggle),
     (Sid::Capture, "Hide in screenshots", Kind::Toggle),
     (Sid::CaptureSelf, "Hide island in my captures", Kind::Toggle),
     (Sid::DevTools, "Developer tools", Kind::Toggle),
@@ -158,7 +159,7 @@ pub const GROUPS: [Group; 19] = [
         name: "General",
         rows: &GENERAL,
         custom: None,
-        sections: &[(0, "Application"), (3, "Behaviour"), (6, "Privacy"), (8, "Advanced")],
+        sections: &[(0, "Application"), (3, "Behaviour"), (7, "Privacy"), (9, "Advanced")],
     },
     Group { glyph: '\u{E7FC}', name: "Game mode", rows: &[], custom: Some(game_mode_items), sections: &[] },
     Group {
@@ -1052,7 +1053,7 @@ fn assistant_recognition_items(ui: &UiState) -> Vec<Item> {
     let mut out = vec![Item::Heading("Speech recognition")];
     if !from_guide {
         out.extend([
-            Item::Row(Sid::AsstWake, "Listen for the call word", Kind::Toggle),
+            Item::Row(Sid::AsstWake, "Listen for the call word (uses about 90 MB of memory)", Kind::Toggle),
             Item::Field(Field::WakeWord, "Voice command name", "Island, Айленд"),
             Item::Button(Act::WakeSave, "Save command name".into(), true),
             Item::Row(Sid::AsstInstall, "Download the wake-word model (46 MB)", Kind::Button),

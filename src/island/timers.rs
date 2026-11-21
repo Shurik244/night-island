@@ -178,7 +178,16 @@ impl App {
         }
     }
 
+    pub(in crate::island) fn eco(&self) -> bool {
+        self.settings.auto_eco && view::power_saving()
+    }
+
     pub(in crate::island) fn frame_ms(&self) -> u32 {
+        let base = self.frame_ms_unsaved();
+        if self.eco() { base.max(33) } else { base }
+    }
+
+    fn frame_ms_unsaved(&self) -> u32 {
         use crate::data::settings::FrameRate;
         let monitor = (1000.0 / self.monitor_hz()).round().clamp(4.0, 33.0) as u32;
         match self.settings.frame_rate {

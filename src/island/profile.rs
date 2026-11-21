@@ -25,6 +25,18 @@ pub fn on() -> bool {
     *ON.get_or_init(|| std::env::var_os("NI_PROFILE").is_some())
 }
 
+pub fn memory(stage: &str) {
+    if on()
+        && let Some(usage) = crate::platform::memory::usage()
+    {
+        crate::log_info!(
+            "profile memory at {stage}: private {} MB, working set {} MB",
+            usage.private_mb(),
+            usage.working_mb()
+        );
+    }
+}
+
 pub fn span_name(code: u32) -> &'static str {
     match code {
         1 => "span:pet.render_designed",
@@ -93,7 +105,8 @@ pub fn record(name: String, spent: Duration) {
             .take(SHOWN)
             .map(|(k, n, ns)| format!("{k} {:.1}/s {:.1}ms/s", *n as f32 / secs, *ns as f32 / 1e6 / secs))
             .collect();
-        crate::log_info!("profile {secs:.0}s (wall time in handlers): {}", text.join(" | "));
+        let private = crate::platform::memory::usage().map_or(0, |u| u.private_mb());
+        crate::log_info!("profile {secs:.0}s, private {private} MB (wall time in handlers): {}", text.join(" | "));
         totals.rows.clear();
         totals.since = Instant::now();
     });

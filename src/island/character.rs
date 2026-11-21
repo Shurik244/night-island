@@ -566,7 +566,12 @@ impl App {
         let pose = characters::Pose { t, reaction, look, blink: blink && !still, accent, beat, motion };
         let settling =
             [motion.behavior.sit, motion.behavior.sleep].iter().any(|value| *value > 0.005 && *value < 0.995);
-        let interval = self.settings.pet_performance.interval(
+        let performance = match self.settings.pet_performance {
+            crate::ui::pet_motion::PetPerformance::Still => crate::ui::pet_motion::PetPerformance::Still,
+            _ if self.eco() => crate::ui::pet_motion::PetPerformance::Eco,
+            other => other,
+        };
+        let interval = performance.interval(
             near || held
                 || self.pet.returning.is_some()
                 || gaze_moving

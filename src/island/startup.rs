@@ -47,6 +47,7 @@ pub fn run() -> Result<()> {
         let started = Instant::now();
         crate::data::log::init();
         crate::log_info!("starting Night Island {}", env!("CARGO_PKG_VERSION"));
+        super::profile::memory("process start");
         update::clean_up_after_update();
         if let Err(e) = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) {
             crate::log_warn!("DPI awareness was already fixed before start: {e}");
@@ -131,6 +132,7 @@ pub fn run() -> Result<()> {
         );
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         crate::log_info!("Primary window ready in {} ms", started.elapsed().as_millis());
+        super::profile::memory("window ready");
         with_app(|app| app.configure_system_notifications());
         with_app(|app| app.configure_desktop_dock());
         with_app(|app| app.configure_top_panel());
@@ -170,6 +172,7 @@ pub fn run() -> Result<()> {
             crate::platform::autostart::refresh();
         }
         crate::log_info!("Startup services scheduled in {} ms", started.elapsed().as_millis());
+        super::profile::memory("services scheduled");
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);

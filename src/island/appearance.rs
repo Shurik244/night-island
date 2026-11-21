@@ -195,6 +195,7 @@ impl App {
     pub(in crate::island) fn update_weather_timer(&self) {
         if self.weather_animating() {
             let slowest = if self.state == State::Expanded { WEATHER_FRAME_MS_OPEN } else { WEATHER_FRAME_MS_PILL };
+            let slowest = if self.eco() { slowest * 2 } else { slowest };
             self.set_timer(Timer::Weather, self.frame_ms().max(slowest));
         } else {
             self.kill_timer(Timer::Weather);
