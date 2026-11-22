@@ -504,6 +504,7 @@ pub struct Settings {
     pub update_check: bool,
     pub update_beta: bool,
     pub ai: AiSettings,
+    pub translate: TranslateSettings,
     pub assistant: crate::services::assistant::Assistant,
     pub hidden_tabs: Vec<String>,
     pub notify: NotifySettings,
@@ -527,6 +528,10 @@ pub struct Settings {
     pub capture_hidden: bool,
     pub capture_self_hidden: bool,
     pub game_mode: bool,
+    pub auto_eco: bool,
+    pub game_ai: bool,
+    pub game_windowed: bool,
+    pub ai_check_on_save: bool,
     pub auto_hide: bool,
     pub lock_drag: bool,
     pub acrylic: bool,
@@ -557,6 +562,7 @@ pub struct Settings {
     pub ghost_hold: bool,
     pub home_actions: Vec<u8>,
     pub home_widgets: bool,
+    pub home_widget_details: bool,
     pub home_weather_widget: bool,
     pub home_widget_sizes: BTreeMap<u8, crate::data::home_widgets::WidgetSize>,
     pub lyrics_apps: Vec<String>,
@@ -652,6 +658,7 @@ impl Default for Settings {
             update_check: true,
             update_beta: false,
             ai: AiSettings::default(),
+            translate: TranslateSettings::default(),
             assistant: crate::services::assistant::Assistant::default(),
             hidden_tabs: Vec::new(),
             notify: NotifySettings::default(),
@@ -671,6 +678,10 @@ impl Default for Settings {
             capture_hidden: false,
             capture_self_hidden: true,
             game_mode: true,
+            auto_eco: true,
+            game_ai: true,
+            game_windowed: false,
+            ai_check_on_save: true,
             auto_hide: false,
             lock_drag: true,
             acrylic: true,
@@ -700,6 +711,7 @@ impl Default for Settings {
             ghost_click_through: true,
             ghost_hold: false,
             home_widgets: true,
+            home_widget_details: true,
             home_weather_widget: true,
             home_widget_sizes: BTreeMap::new(),
             home_actions: Vec::new(),
@@ -759,6 +771,81 @@ impl AiProvider {
             AiProvider::OpenAi => "gpt-4o-mini",
             AiProvider::Gemini => "gemini-2.0-flash",
         }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TranslateProvider {
+    #[default]
+    Google,
+    Bing,
+    MyMemory,
+    DeepL,
+    GoogleCloud,
+    Azure,
+    Assistant,
+}
+
+impl TranslateProvider {
+    pub const ALL: [TranslateProvider; 7] = [
+        TranslateProvider::Google,
+        TranslateProvider::Bing,
+        TranslateProvider::MyMemory,
+        TranslateProvider::DeepL,
+        TranslateProvider::GoogleCloud,
+        TranslateProvider::Azure,
+        TranslateProvider::Assistant,
+    ];
+
+    pub const FREE: [TranslateProvider; 3] =
+        [TranslateProvider::Google, TranslateProvider::Bing, TranslateProvider::MyMemory];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            TranslateProvider::Google => "google",
+            TranslateProvider::Bing => "bing",
+            TranslateProvider::MyMemory => "mymemory",
+            TranslateProvider::DeepL => "deepl",
+            TranslateProvider::GoogleCloud => "gcloud",
+            TranslateProvider::Azure => "azure",
+            TranslateProvider::Assistant => "assistant",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TranslateProvider::Google => "Google (free)",
+            TranslateProvider::Bing => "Bing (free)",
+            TranslateProvider::MyMemory => "MyMemory (free)",
+            TranslateProvider::DeepL => "DeepL (key)",
+            TranslateProvider::GoogleCloud => "Google Cloud (key)",
+            TranslateProvider::Azure => "Azure (key)",
+            TranslateProvider::Assistant => "Assistant (AI)",
+        }
+    }
+
+    pub fn needs_key(self) -> bool {
+        matches!(self, TranslateProvider::DeepL | TranslateProvider::GoogleCloud | TranslateProvider::Azure)
+    }
+
+    pub fn step(self, forward: bool) -> Self {
+        let at = Self::ALL.iter().position(|p| *p == self).unwrap_or(0);
+        Self::ALL[(at + if forward { 1 } else { Self::ALL.len() - 1 }) % Self::ALL.len()]
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct TranslateSettings {
+    pub provider: TranslateProvider,
+    pub target: String,
+    pub auto: bool,
+}
+
+impl Default for TranslateSettings {
+    fn default() -> Self {
+        Self { provider: TranslateProvider::default(), target: "en".into(), auto: true }
     }
 }
 
@@ -936,7 +1023,7 @@ impl WeatherSide {
 pub const HEADER_TAB_LIMIT: usize = HIDEABLE_TABS.len();
 pub const DEFAULT_HEADER_TABS: [&str; 5] = ["Clipboard", "Text", "Note", "Weather", "Record"];
 
-pub const HIDEABLE_TABS: [&str; 13] = [
+pub const HIDEABLE_TABS: [&str; 15] = [
     "Clipboard",
     "Text",
     "Note",
@@ -950,6 +1037,8 @@ pub const HIDEABLE_TABS: [&str; 13] = [
     "App mixer",
     "Notifications",
     "My Wave",
+    "Translate",
+    "Macros",
 ];
 
 impl Settings {
@@ -1123,6 +1212,9 @@ impl Settings {
         }
         self.hidden_tabs = seen;
         self.ai.sanitize();
+        if !crate::services::translate::LANGUAGES.iter().any(|(code, _)| *code == self.translate.target) {
+            self.translate.target = TranslateSettings::default().target;
+        }
         self.assistant.sanitize();
         self.record_fps = self.record_fps.clamp(10, 60);
         self.pill_opacity = clamp_f(self.pill_opacity, 0.2, 1.0, 1.0);

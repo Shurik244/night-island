@@ -48,7 +48,18 @@ impl LiveActivity {
 }
 
 pub fn live_tile_count(ui: &UiState) -> usize {
-    if ui.home.edit || ui.home.widgets.editing {
+    let represented = ui.cfg.home_widgets
+        && ui.cfg.home_widget_details
+        && ui.notifications.preview.is_none()
+        && ui.live.iter().all(|a| {
+            let id = match a.kind {
+                LiveKind::Reminder(_) => 18,
+                LiveKind::Recording => 6,
+                LiveKind::Download => return false,
+            };
+            ui.cfg.home_actions.contains(&id) && widget_size(ui, id) != crate::data::home_widgets::WidgetSize::Tile
+        });
+    if ui.home.edit || ui.home.widgets.editing || represented {
         0
     } else {
         ui.live.len().min(4).min(MAX_HOME_TILES.saturating_sub(notification_tile_count(ui)))

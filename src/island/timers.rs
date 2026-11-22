@@ -97,10 +97,11 @@ pub(in crate::island) enum Timer {
     WaveSearch = 43,
     Taskbar = 44,
     LiveActivity = 45,
+    Translate = 46,
 }
 
 impl Timer {
-    const ALL: [Timer; 45] = [
+    const ALL: [Timer; 46] = [
         Timer::Expand,
         Timer::Collapse,
         Timer::Shrink,
@@ -146,11 +147,16 @@ impl Timer {
         Timer::WaveSearch,
         Timer::Taskbar,
         Timer::LiveActivity,
+        Timer::Translate,
     ];
 
     fn from_id(id: usize) -> Option<Timer> {
         Self::ALL.into_iter().find(|t| *t as usize == id)
     }
+}
+
+pub(in crate::island) fn timer_name(id: usize) -> String {
+    Timer::from_id(id).map_or_else(|| format!("#{id}"), |t| format!("{t:?}"))
 }
 
 impl App {
@@ -172,7 +178,16 @@ impl App {
         }
     }
 
+    pub(in crate::island) fn eco(&self) -> bool {
+        self.settings.auto_eco && view::power_saving()
+    }
+
     pub(in crate::island) fn frame_ms(&self) -> u32 {
+        let base = self.frame_ms_unsaved();
+        if self.eco() { base.max(33) } else { base }
+    }
+
+    fn frame_ms_unsaved(&self) -> u32 {
         use crate::data::settings::FrameRate;
         let monitor = (1000.0 / self.monitor_hz()).round().clamp(4.0, 33.0) as u32;
         match self.settings.frame_rate {
@@ -242,6 +257,7 @@ impl App {
         self.kill_timer(timer);
         match timer {
             Timer::LiveActivity => self.live_activity_tick(),
+            Timer::Translate => self.run_translate(false),
             Timer::Taskbar => self.configure_taskbar_replacement(),
             Timer::TopPanel => self.update_top_panel(false),
             Timer::NotificationStage => self.notification_stage(),

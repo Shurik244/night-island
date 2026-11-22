@@ -463,6 +463,9 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
                 Some(Hotkey::Qr) => with_app(|a| a.capture(capture::Mode::Qr)),
                 Some(Hotkey::Rec) => with_app(|a| a.toggle_recording()),
                 Some(Hotkey::Dictate) => with_app(|a| a.toggle_dictation()),
+                None if wparam.0 as i32 >= crate::services::macros::HOTKEY_BASE => {
+                    with_app(|a| a.on_macro_hotkey(wparam.0 as i32))
+                }
                 _ => {}
             }
             LRESULT(0)
@@ -575,8 +578,19 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
             }
             LRESULT(0)
         }
+        wake::WM_WAKE_STATUS => {
+            with_app(|a| {
+                if let Some(Err(why)) = wake::take_status() {
+                    a.notify(Notice::Error, '\u{E783}', &why);
+                }
+                a.render_settings_win();
+            });
+            LRESULT(0)
+        }
         wake::WM_WAKE => {
-            with_app(|a| a.on_wake());
+            if wake::current_revision(wparam.0 as u64) {
+                with_app(|a| a.on_wake());
+            }
             LRESULT(0)
         }
         wake_install::WM_WAKE_SETUP => {
@@ -620,6 +634,29 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
         }
         ai::WM_SORT => {
             with_app(|a| a.on_sort());
+            LRESULT(0)
+        }
+        crate::platform::game_mode::WM_GAME_CLASSIFIED => {
+            with_app(|a| {
+                a.on_game_timer();
+                a.render_settings_win();
+            });
+            LRESULT(0)
+        }
+        ai::WM_AI_CHECKED => {
+            with_app(|a| a.on_ai_checked());
+            LRESULT(0)
+        }
+        crate::services::macros::WM_MACRO => {
+            with_app(|a| a.on_macro_done());
+            LRESULT(0)
+        }
+        crate::platform::input_record::WM_RECORD_STOP => {
+            with_app(|a| a.on_record_stop());
+            LRESULT(0)
+        }
+        crate::services::translate::WM_TRANSLATE => {
+            with_app(|a| a.on_translate());
             LRESULT(0)
         }
         ai::WM_AI => {
@@ -708,7 +745,10 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_SHOW => {
-            with_app(|a| a.peek());
+            with_app(|a| {
+                a.recheck_game_state();
+                a.peek();
+            });
             LRESULT(0)
         }
         crate::ui::companion::WM_COMPANION => {

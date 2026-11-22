@@ -1,5 +1,10 @@
 use crate::island::*;
 
+const WEATHER_FRAME_MS_PILL: u32 = 100;
+const WEATHER_FRAME_MS_OPEN: u32 = 50;
+const AWAY_AFTER_MS: u32 = 180_000;
+const AWAY_CHECK_MS: u32 = 2000;
+
 pub(crate) fn set_host_backdrop(hwnd: HWND, enabled: bool) {
     #[repr(C)]
     struct AccentPolicy {
@@ -191,13 +196,25 @@ impl App {
 
     pub(in crate::island) fn update_weather_timer(&self) {
         if self.weather_animating() {
-            self.set_timer(Timer::Weather, self.frame_ms());
+            let slowest = if self.state == State::Expanded { WEATHER_FRAME_MS_OPEN } else { WEATHER_FRAME_MS_PILL };
+            let slowest = if self.eco() { slowest * 2 } else { slowest };
+            self.set_timer(Timer::Weather, self.frame_ms().max(slowest));
+        } else if self.weather_visible() && Self::user_away() {
+            self.set_timer(Timer::Weather, AWAY_CHECK_MS);
         } else {
             self.kill_timer(Timer::Weather);
         }
     }
 
+    pub(in crate::island) fn user_away() -> bool {
+        Self::idle_ms() >= AWAY_AFTER_MS
+    }
+
     pub(in crate::island) fn weather_animating(&self) -> bool {
+        self.weather_visible() && !Self::user_away()
+    }
+
+    fn weather_visible(&self) -> bool {
         let shown = match self.state {
             State::Expanded => self.ui.tab == view::Tab::Weather,
             State::Collapsed => view::pill_weather_visible(&self.ui) && !view::pill_progress_fill_on(&self.ui),
@@ -216,7 +233,7 @@ impl App {
 
     pub(in crate::island) fn weather_tick(&self) {
         if !self.weather_animating() {
-            return;
+            return self.update_weather_timer();
         }
         if self.state == State::Expanded {
             return self.repaint_expanded();

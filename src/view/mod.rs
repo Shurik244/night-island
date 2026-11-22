@@ -31,6 +31,7 @@ mod home;
 mod home_widgets;
 mod integrations;
 mod live;
+mod macros;
 mod memory_tools;
 mod metrics;
 mod mixer;
@@ -49,8 +50,10 @@ mod settings_window;
 mod steam;
 mod text;
 mod tips;
+mod translate;
 mod wave_theme;
 mod weather;
+mod widget_details;
 mod widgets;
 mod yandex;
 
@@ -59,14 +62,16 @@ pub use self::tips::content_tip;
 pub use self::{
     activity::*, agy::*, chat::*, clipboard::*, command::*, companion_popup::*, controls::*, discord::*, frame::*,
     home::*, integrations::*, metrics::*, mixer::*, music_intro::*, note::*, notifications::*, pill::*,
-    pill_vertical::*, privacy::*, record::*, remind::*, settings::*, settings_window::*, steam::*, text::*, weather::*,
-    widgets::*, yandex::*,
+    pill_vertical::*, privacy::*, record::*, remind::*, settings::*, settings_window::*, steam::*, text::*,
+    translate::*, weather::*, widgets::*, yandex::*,
 };
 pub use guide::*;
 pub use home_widgets::*;
 pub use live::*;
+pub use macros::*;
 pub use memory_tools::*;
 pub use pet_studio::*;
+pub use widget_details::*;
 
 pub type Rect = (f32, f32, f32, f32);
 pub use wave_theme::{WaveColours, wave_colour};
@@ -89,10 +94,12 @@ pub enum Tab {
     Mixer,
     Notifications,
     Yandex,
+    Translate,
+    Macros,
     Settings,
 }
 
-pub const TABS: [(Tab, char, &str); 17] = [
+pub const TABS: [(Tab, char, &str); 19] = [
     (Tab::Home, '\u{E80F}', "Home"),
     (Tab::Clipboard, '\u{E77F}', "Clipboard"),
     (Tab::Text, '\u{E8E9}', "Text"),
@@ -109,6 +116,8 @@ pub const TABS: [(Tab, char, &str); 17] = [
     (Tab::Mixer, '\u{E9E9}', "App mixer"),
     (Tab::Notifications, '\u{EA8F}', "Notifications"),
     (Tab::Yandex, crate::ui::icons::YANDEX_MUSIC_GLYPH, "My Wave"),
+    (Tab::Translate, '\u{E775}', "Translate"),
+    (Tab::Macros, '\u{E768}', "Macros"),
     (Tab::Settings, '\u{E713}', "Settings"),
 ];
 
@@ -170,6 +179,8 @@ pub struct UiState {
     pub remind: RemindUi,
     pub cfg: Settings,
     pub text: TextUi,
+    pub translate: TranslateUi,
+    pub macros: MacrosUi,
     pub editing: bool,
     pub caret_on: bool,
     pub media: Media,
@@ -237,6 +248,8 @@ impl UiState {
             remind: RemindUi::default(),
             int: IntegrationsUi::default(),
             text: TextUi::default(),
+            translate: TranslateUi::default(),
+            macros: MacrosUi::default(),
             clip: ClipUi::default(),
             city: CityUi::default(),
             home: HomeUi::default(),

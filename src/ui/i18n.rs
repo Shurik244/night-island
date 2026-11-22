@@ -28,6 +28,68 @@ pub fn is_ru() -> bool {
 
 fn phrase(s: &str) -> Option<&'static str> {
     Some(match s {
+        "Last active app" => "Последняя активная программа",
+        "Your app rules" => "Ваши правила для программ",
+        "Without an AI key, built-in rules and your own rules still work." => {
+            "Без ключа ИИ работают встроенные и ваши правила."
+        }
+        "Set up the AI model" => "Настроить модель ИИ",
+        "Checking sends one small test request to the selected model." => {
+            "Проверка отправляет небольшой запрос выбранной модели."
+        }
+        "Detailed tool widgets" => "Подробные виджеты инструментов",
+        "This quick action stays compact. Add a data widget to resize." => {
+            "Эта команда остаётся кнопкой. Для размера выберите виджет данных."
+        }
+        "Start recording" => "Начать запись",
+        "Open reminders" => "Напоминания",
+        "Open Steam" => "Открыть Steam",
+        "Ready to record" => "Готово к записи",
+        "No upcoming reminders" => "Нет ближайших напоминаний",
+        "No game running" => "Игра не запущена",
+        "No active sessions" => "Нет активных сессий",
+        "Status unavailable" => "Статус недоступен",
+        "Learn unknown apps with AI" => "Определять незнакомые приложения через ИИ",
+        "Hide in windowed games too" => "Скрывать остров и в оконных играх",
+        "AI sees only the executable name and product description." => {
+            "ИИ получает только имя программы и описание из её файла."
+        }
+        "No window titles, screenshots or full paths are sent." => {
+            "Заголовки окон, снимки и полные пути не отправляются."
+        }
+        "Unknown apps stay visible until classified. Desktop and Island windows are never games." => {
+            "В незнакомых программах остров виден до проверки. Рабочий стол всегда исключён."
+        }
+        "Always show the island in this app" => "Всегда показывать остров в этой программе",
+        "Treat this app as a game" => "Считать эту программу игрой",
+        "Recognize this app automatically" => "Определять эту программу автоматически",
+        "Game: your rule" => "Игра — ваше правило",
+        "App: your rule" => "Программа — ваше правило",
+        "App: built-in rule" => "Программа — встроенное правило",
+        "Game: built-in rule" => "Игра — встроенное правило",
+        "Game: learned" => "Игра — запомнено",
+        "App: learned" => "Программа — запомнено",
+        "Checking this app with AI…" => "ИИ определяет тип программы…",
+        "Unknown app: island stays visible" => "Тип неизвестен — остров остаётся видимым",
+        "App" => "Программа",
+        "Game" => "Игра",
+        "Test the connection after saving" => "Проверять подключение после сохранения",
+        "Save and check" => "Сохранить и проверить",
+        "Checking key, model and server…" => "Проверяю ключ, модель и сервер…",
+        "Checking connection…" => "Проверка подключения…",
+        "Connection verified" => "Подключение проверено",
+        "Key saved; connection not verified" => "Ключ сохранён, подключение ещё не проверено",
+        "Connection verified. The model answered." => "Подключение работает. Модель ответила на проверку.",
+        "Check connection" => "Проверить подключение",
+        "This name cannot be recognized. Try another name." => "Модель не может распознать это имя. Попробуйте другое.",
+        "Could not read the wake-word vocabulary" => "Не удалось прочитать словарь голосовой модели",
+        "Could not load the wake-word model" => "Не удалось загрузить модель слова-вызова",
+        "The microphone is unavailable. Check the recording device." => {
+            "Микрофон недоступен. Проверьте устройство записи."
+        }
+        "AC power" => "От сети",
+        "Please wait…" => "Подождите…",
+
         "Keep music covers on this computer" => "Сохранять обложки музыки на компьютере",
         "Drag tiles to arrange; pull a corner to resize" => "Перетаскивайте плитки; тяните за угол для размера",
         "Search" => "Поиск",
@@ -927,6 +989,70 @@ fn phrase(s: &str) -> Option<&'static str> {
         "Nothing is playing" => "Сейчас ничего не играет",
         "Click to close" => "Нажми, чтобы закрыть",
         "Paste clipboard" => "Из буфера",
+        "Translate" => "Перевод",
+        "Macros" => "Макросы",
+        "Guide" => "Гайд",
+        "Could not open the file" => "Не удалось открыть файл",
+        "Could not open the guide" => "Не удалось открыть гайд",
+        "The ViGEmBus driver is not installed" => "Не установлен драйвер ViGEmBus (нужен для виртуального геймпада)",
+        "Could not create the virtual gamepad" => "Не удалось создать виртуальный геймпад",
+        "The virtual gamepad did not become ready" => "Виртуальный геймпад не подготовился",
+        "Hotkey" => "Хоткей",
+        "Method" => "Способ",
+        "Folder" => "Папка",
+        "Press keys…" => "Нажмите клавиши…",
+        "Confirm" => "Подтвердить",
+        "No macros yet. Press New or Record." => "Макросов пока нет. Нажмите «New» или «Запись».",
+        "No hotkey" => "Без хоткея",
+        "Select a macro or press New" => "Выберите макрос или создайте новый",
+        "Scan codes" => "Сканкоды",
+        "Virtual keys" => "Виртуальные клавиши",
+        "Legacy events" => "Старые события",
+        "Window messages" => "Сообщения окну",
+        "The hotkey is taken by another program" => "Хоткей занят другой программой",
+        "Could not save the macro" => "Не удалось сохранить макрос",
+        "Could not create the macro" => "Не удалось создать макрос",
+        "Could not start recording" => "Не удалось начать запись",
+        "Could not save the recording" => "Не удалось сохранить запись",
+        "Recording: everything you type and click is saved. Ctrl+Alt+F12 or Stop ends it" => {
+            "Запись: сохраняется всё, что вы печатаете и нажимаете. Конец: Ctrl+Alt+F12 или «Стоп»"
+        }
+        "Press the new combination (Esc cancels, Delete clears)" => {
+            "Нажмите новую комбинацию (Esc отмена, Delete очистить)"
+        }
+        "A hotkey needs a modifier and a regular key" => "Хоткею нужны модификатор и обычная клавиша",
+        "The hotkey is cleared" => "Хоткей очищен",
+        "Press Delete again to remove the file" => "Нажмите «Delete» ещё раз, чтобы удалить файл",
+        "The macro file was deleted" => "Файл макроса удалён",
+        "Another macro is running" => "Уже выполняется другой макрос",
+        "The macro finished" => "Макрос выполнен",
+        "Recorded. Check the steps, then Run" => "Записано. Проверьте шаги и запустите",
+        "Nothing was recorded" => "Ничего не записано",
+        "Saved" => "Сохранено",
+        "Auto translate" => "Автоперевод",
+        "Set key from clipboard" => "Ключ из буфера",
+        "Replace key from clipboard" => "Заменить ключ из буфера",
+        "Copy result" => "Копировать перевод",
+        "Detected" => "Определён язык",
+        "Translating…" => "Перевожу…",
+        "Type or paste text to translate" => "Введите или вставьте текст для перевода",
+        "The translation appears here" => "Здесь появится перевод",
+        "Nothing to translate" => "Нечего переводить",
+        "Nothing to copy" => "Нечего копировать",
+        "Add the API key first" => "Сначала добавьте ключ API",
+        "The text is too long" => "Текст слишком длинный",
+        "Unknown language" => "Неизвестный язык",
+        "Pasted from the clipboard, press Translate" => "Вставлено из буфера, нажмите «Перевод»",
+        "Translated by" => "Переведено через",
+        "The key is saved" => "Ключ сохранён",
+        "The clipboard does not hold a valid key" => "В буфере нет подходящего ключа",
+        "No connection to the translation service" => "Нет связи с сервисом перевода",
+        "The service rejected the key" => "Сервис отклонил ключ",
+        "The service answered something unexpected" => "Сервис ответил что-то непонятное",
+        "The service returned an empty translation" => "Сервис вернул пустой перевод",
+        "The service refused the request" => "Сервис отклонил запрос",
+        "The translation service did not answer" => "Сервис перевода не ответил",
+        "The service did not give an access token" => "Сервис не выдал токен доступа",
         "Copy" => "Копировать",
         "Paste to window" => "Вставить в окно",
         "Clear" => "Очистить",
@@ -1745,10 +1871,12 @@ fn phrase(s: &str) -> Option<&'static str> {
         "Up to 5 names of up to 24 characters, separated by commas" => "До 5 имён по 24 символа, через запятую",
         "Say a command after the name" => "Скажите команду после имени",
         "Assistant" => "Ассистент",
+        "Save power on battery" => "Экономить заряд на батарее",
         "Voice" => "Голос",
         "What it may do" => "Что ассистенту можно",
         "Voice assistant" => "Голосовой ассистент",
         "Listen for the call word" => "Слушать слово-вызов",
+        "Listen for the call word (uses about 90 MB of memory)" => "Слушать слово-вызов (занимает около 90 МБ памяти)",
         "Download the wake-word model (46 MB)" => "Скачать модель слова-вызова (46 МБ)",
         "Sound cues" => "Звуковые сигналы",
         "Speak answers aloud" => "Озвучивать ответы",

@@ -32,22 +32,22 @@ impl PetPerformance {
             Self::Still => return 100,
             Self::Eco => {
                 if sleeping {
-                    4
+                    3
                 } else if active {
-                    20
+                    15
                 } else {
-                    10
+                    6
                 }
             }
             Self::Balanced => {
                 if sleeping {
-                    8
+                    5
                 } else if active {
-                    30
+                    24
                 } else if detached {
-                    12
+                    10
                 } else {
-                    15
+                    12
                 }
             }
             Self::Smooth => {

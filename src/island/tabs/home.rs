@@ -32,6 +32,27 @@ impl App {
         let pill = self.pill_rect(true);
         match view::hit_home(pill, self.scale, x as f32, y as f32, &self.ui) {
             Some(view::HomeHit::WidgetControl(control)) => self.widget_control(control),
+            Some(view::HomeHit::WidgetCommand(command)) => match command {
+                view::WidgetCommand::Recording => {
+                    if self.ui.recording_secs.is_some() {
+                        self.toggle_recording();
+                    } else {
+                        self.home_action(6);
+                    }
+                }
+                view::WidgetCommand::Vpn => {
+                    if !self.ui.vpn_busy {
+                        self.toggle_vpn();
+                    }
+                }
+                view::WidgetCommand::Reminders => self.select_tab(view::Tab::Note),
+                view::WidgetCommand::Steam => self.select_tab(view::Tab::Steam),
+                view::WidgetCommand::Agents => {
+                    if let Some(group) = view::GROUPS.iter().position(|g| g.name == "Agents") {
+                        self.open_settings_at(group);
+                    }
+                }
+            },
             Some(view::HomeHit::WidgetHandle(id)) => self.begin_widget_resize(id, x, y),
             Some(view::HomeHit::Action(id)) if self.ui.home.widgets.editing && !self.ui.home.edit => {
                 self.begin_widget_drag(id as u8, x, y);
@@ -205,9 +226,7 @@ impl App {
             view::Info::Vpn => return self.toggle_vpn(),
             view::Info::Battery | view::Info::Agents | view::Info::Clock => None,
         };
-        if let Some(tab) = tab
-            .filter(|t| view::tab_in_bar(&self.settings, *t, view::TABS.iter().find(|x| x.0 == *t).map_or("", |x| x.2)))
-        {
+        if let Some(tab) = tab {
             self.select_tab(tab);
         }
     }

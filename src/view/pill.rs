@@ -15,6 +15,17 @@ pub fn clock() -> Clock {
     }
 }
 
+pub fn power_saving() -> bool {
+    let mut s = SYSTEM_POWER_STATUS::default();
+    if unsafe { GetSystemPowerStatus(&mut s) }.is_err() {
+        return false;
+    }
+    const BATTERY_SAVER_ON: u8 = 1;
+    const BATTERY_FLAG_NONE: u8 = 128;
+    let on_battery = s.ACLineStatus == 0 && s.BatteryFlag & BATTERY_FLAG_NONE == 0;
+    on_battery || s.SystemStatusFlag == BATTERY_SAVER_ON
+}
+
 pub fn battery() -> Option<(u8, bool)> {
     let mut s = SYSTEM_POWER_STATUS::default();
     unsafe { GetSystemPowerStatus(&mut s).ok()? };

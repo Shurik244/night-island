@@ -471,6 +471,7 @@ impl App {
         let urgent = self.ui.remind.alert.is_some() || self.pet.reaction_until.is_some_and(|(_, until)| now < until);
         let pet_card = self.pet_notification_visible();
         let behavior = self.pet.desktop.as_ref().map(|desktop| {
+            let _span = super::profile::span(3);
             self.pet.behavior.advance(&crate::ui::pet_behavior::Environment {
                 dt,
                 enabled: self.settings.pet_autonomy && self.pet.returning.is_none(),
@@ -565,7 +566,18 @@ impl App {
         let pose = characters::Pose { t, reaction, look, blink: blink && !still, accent, beat, motion };
         let settling =
             [motion.behavior.sit, motion.behavior.sleep].iter().any(|value| *value > 0.005 && *value < 0.995);
-        let interval = self.settings.pet_performance.interval(
+        let away_pause =
+            if Self::user_away() && !speech_cue.engaged() && !urgent && !pet_card && self.pet.returning.is_none() {
+                1000
+            } else {
+                0
+            };
+        let performance = match self.settings.pet_performance {
+            crate::ui::pet_motion::PetPerformance::Still => crate::ui::pet_motion::PetPerformance::Still,
+            _ if self.eco() => crate::ui::pet_motion::PetPerformance::Eco,
+            other => other,
+        };
+        let interval = performance.interval(
             near || held
                 || self.pet.returning.is_some()
                 || gaze_moving
@@ -603,8 +615,10 @@ impl App {
         let key = (reaction, pose.blink, color, if still { 0 } else { self.pet.frame });
         if self.pet.char_key != Some(key) {
             let drawn = if let Some(desktop) = &mut self.pet.desktop {
+                let _span = super::profile::span(1);
                 desktop.render_designed(&self.gpu, character, &pose, self.scale, Some(&self.settings.custom_pet))
             } else {
+                let _span = super::profile::span(2);
                 self.pet.char_layer.paint(&self.gpu, |p| {
                     let draw = if self.settings.pill_unified_layout {
                         characters::draw_attached
@@ -619,7 +633,7 @@ impl App {
                 Err(error) => crate::log_warn!("could not draw character: {error}"),
             }
         }
-        self.set_timer(Timer::Char, interval);
+        self.set_timer(Timer::Char, interval.max(away_pause));
         self.maybe_show_notification();
     }
 }

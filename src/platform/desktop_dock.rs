@@ -308,6 +308,26 @@ pub fn fullscreen(monitor: &Monitor) -> bool {
     fullscreen_window(hwnd, monitor, exclusive)
 }
 
+pub fn foreground_summary() -> String {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        let mut class = [0u16; 64];
+        let n = GetClassNameW(hwnd, &mut class) as usize;
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        let mut rect = RECT::default();
+        let _ = GetWindowRect(hwnd, &mut rect);
+        format!(
+            "foreground class={} pid={pid} rect=({},{},{},{})",
+            String::from_utf16_lossy(&class[..n]),
+            rect.left,
+            rect.top,
+            rect.right,
+            rect.bottom
+        )
+    }
+}
+
 fn fullscreen_window(hwnd: HWND, monitor: &Monitor, exclusive: bool) -> bool {
     use windows::Win32::Graphics::Dwm::DWMWA_EXTENDED_FRAME_BOUNDS;
     unsafe {

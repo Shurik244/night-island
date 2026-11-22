@@ -556,6 +556,8 @@ fn paint_tab(p: &Painter, tab: Tab, pill: Rect, scale: f32, ui: &UiState, clips:
         )?,
         Tab::Note => paint_note(p, pill, scale, ui)?,
         Tab::Text => paint_text(p, pill, scale, ui)?,
+        Tab::Translate => paint_translate(p, pill, scale, ui)?,
+        Tab::Macros => paint_macros(p, pill, scale, ui)?,
         Tab::Settings => {}
         Tab::Record => paint_record(p, pill, scale, ui)?,
     }

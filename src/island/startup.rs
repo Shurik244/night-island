@@ -8,6 +8,19 @@ fn mutex_name() -> windows::core::HSTRING {
     }
 }
 
+fn wait_for_shell() {
+    let started = Instant::now();
+    while started.elapsed() < std::time::Duration::from_secs(30) {
+        let ready =
+            unsafe { FindWindowW(w!("Shell_TrayWnd"), None).is_ok() && FindWindowW(w!("Progman"), None).is_ok() };
+        if ready {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    crate::log_info!("shell ready after {} ms", started.elapsed().as_millis());
+}
+
 pub fn run() -> Result<()> {
     unsafe {
         let mut _mutex = CreateMutexW(None, false, &mutex_name())?;
@@ -34,8 +47,14 @@ pub fn run() -> Result<()> {
         let started = Instant::now();
         crate::data::log::init();
         crate::log_info!("starting Night Island {}", env!("CARGO_PKG_VERSION"));
+        super::profile::memory("process start");
         update::clean_up_after_update();
-        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        if let Err(e) = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) {
+            crate::log_warn!("DPI awareness was already fixed before start: {e}");
+        }
+        if std::env::args().any(|a| a == "--startup") {
+            wait_for_shell();
+        }
         RoInitialize(RO_INIT_SINGLETHREADED)?;
         let _dispatcher = CreateDispatcherQueueController(DispatcherQueueOptions {
             dwSize: size_of::<DispatcherQueueOptions>() as u32,
@@ -69,7 +88,16 @@ pub fn run() -> Result<()> {
             None,
         )?;
 
-        TASKBAR_CREATED.store(RegisterWindowMessageW(w!("TaskbarCreated")), Ordering::Relaxed);
+        let taskbar_created = RegisterWindowMessageW(w!("TaskbarCreated"));
+        TASKBAR_CREATED.store(taskbar_created, Ordering::Relaxed);
+        for message in [taskbar_created, WM_SHOW] {
+            let _ = windows::Win32::UI::WindowsAndMessaging::ChangeWindowMessageFilterEx(
+                hwnd,
+                message,
+                windows::Win32::UI::WindowsAndMessaging::MSGFLT_ALLOW,
+                None,
+            );
+        }
         tray::add(hwnd);
         clips::sys::listen(hwnd);
         dnd::register(hwnd);
@@ -104,6 +132,7 @@ pub fn run() -> Result<()> {
         );
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         crate::log_info!("Primary window ready in {} ms", started.elapsed().as_millis());
+        super::profile::memory("window ready");
         with_app(|app| app.configure_system_notifications());
         with_app(|app| app.configure_desktop_dock());
         with_app(|app| app.configure_top_panel());
@@ -112,6 +141,7 @@ pub fn run() -> Result<()> {
         if !failed.is_empty() {
             crate::log_warn!("hotkeys taken by another program: {failed:?}");
         }
+        with_app(|app| app.reload_macros(None));
         #[cfg(feature = "demo")]
         demo::apply(hwnd);
         apps::start_indexing();
@@ -142,10 +172,17 @@ pub fn run() -> Result<()> {
             crate::platform::autostart::refresh();
         }
         crate::log_info!("Startup services scheduled in {} ms", started.elapsed().as_millis());
+        super::profile::memory("services scheduled");
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+            if super::profile::on() {
+                let started = Instant::now();
+                DispatchMessageW(&msg);
+                super::profile::dispatch(&msg, started.elapsed());
+            } else {
+                DispatchMessageW(&msg);
+            }
         }
     }
     Ok(())

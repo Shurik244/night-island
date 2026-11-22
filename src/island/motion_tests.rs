@@ -600,27 +600,28 @@ fn native_widget_resize_commits_on_release_and_cancels_without_saving() -> Resul
     {
         let owner = window(WS_EX_NOREDIRECTIONBITMAP)?;
         let settings = Settings {
-            home_actions: vec![0, 1],
+            home_actions: vec![8, 1],
             home_weather_widget: false,
             island_animations: false,
             character: Character::None,
             ..Settings::default()
         };
         let mut app = App::new_visuals(owner.0, 1.0, settings)?;
+        app.ui.cfg = app.settings.clone();
         app.state = State::Expanded;
         app.win = Win::Big;
         app.toggle_widget_editor();
-        app.begin_widget_resize(0, 0, 0);
+        app.begin_widget_resize(8, 0, 0);
         assert!(app.drag_widget_resize(132, 54));
-        assert_eq!(app.ui.home.widgets.preview, Some((0, crate::data::home_widgets::WidgetSize::Wide4)));
+        assert_eq!(app.ui.home.widgets.preview, Some((8, crate::data::home_widgets::WidgetSize::Wide4)));
         assert!(app.settings.home_widget_sizes.is_empty());
         assert!(app.cancel_widget_resize());
         assert!(app.settings.home_widget_sizes.is_empty());
         assert!(app.ui.home.widgets.preview.is_none());
-        app.begin_widget_resize(0, 0, 0);
+        app.begin_widget_resize(8, 0, 0);
         app.drag_widget_resize(0, 54);
         assert!(app.finish_widget_resize());
-        assert_eq!(app.settings.home_widget_sizes.get(&0), Some(&crate::data::home_widgets::WidgetSize::Tall2));
+        assert_eq!(app.settings.home_widget_sizes.get(&8), Some(&crate::data::home_widgets::WidgetSize::Tall2));
         let mut restored: Settings = serde_json::from_str(&serde_json::to_string(&app.settings).unwrap()).unwrap();
         restored.sanitize();
         assert_eq!(restored.home_widget_sizes, app.settings.home_widget_sizes);
@@ -728,6 +729,128 @@ fn native_widget_drag_previews_then_commits_or_cancels_at_every_scale() -> Resul
     drop(queue);
     unsafe {
         RoUninitialize();
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "Renders contextual tool widgets and Assistant/Game settings using real Direct2D"]
+fn native_tool_widgets_and_assistant_settings_preview() -> Result<()> {
+    unsafe {
+        RoInitialize(RO_INIT_SINGLETHREADED)?;
+    }
+    let _queue = unsafe {
+        CreateDispatcherQueueController(DispatcherQueueOptions {
+            dwSize: size_of::<DispatcherQueueOptions>() as u32,
+            threadType: DQTYPE_THREAD_CURRENT,
+            apartmentType: DQTAT_COM_NONE,
+        })?
+    };
+    let compositor = Compositor::new()?;
+    let gpu = Gpu::new(&compositor)?;
+    let surface = crate::ui::popup::PopupSurface::new((1320, 1230))?;
+    let mut ui = view::UiState::new();
+    ui.cfg.home_weather_widget = false;
+    ui.cfg.island_animations = false;
+    ui.cfg.activity_track = true;
+    ui.media.title = "Night Island".into();
+    ui.media.artist = "Предпросмотр виджетов".into();
+    ui.home.preview_timeline = Some((65.0, 200.0));
+    ui.remind.list = vec![(1, "Заварить чай".into(), "14:30".into()), (2, "Встреча".into(), "16:00".into())];
+    ui.steam.running = Some((730, "Counter-Strike 2".into(), Instant::now() - Duration::from_secs(5400)));
+    ui.agents = vec![agents::Session {
+        agent: agents::Agent::Codex,
+        id: "fixture".into(),
+        state: agents::State::Working,
+        project: "Night Island".into(),
+        at: 0,
+    }];
+    ui.vpn = Some(true);
+    ui.recording_secs = Some(95);
+    ui.home.screen_secs = Some(12500);
+    ui.home.widget_activity = vec![("Редактор".into(), 7000), ("Браузер".into(), 5000)];
+    for n in 0..60 {
+        ui.metrics.push(
+            metrics::Sample {
+                cpu: 20.0 + (n as f32 * 0.35).sin() * 15.0 + 20.0,
+                ram: 65.0,
+                ram_used: 22 * 1024 * 1024 * 1024,
+                ram_total: 32 * 1024 * 1024 * 1024,
+                gpu: Some(30.0),
+                disk: 35.0,
+                disk_used: 180 * 1024 * 1024 * 1024,
+                disk_total: 512 * 1024 * 1024 * 1024,
+                net_down: 3_000_000.0 + (n as f32 * 0.2).sin() * 2_000_000.0,
+                net_up: 200000.0,
+                uptime: 58000,
+            },
+            &[],
+        );
+    }
+    use crate::data::home_widgets::WidgetSize::{Tall4, Wide4};
+    let cases = [
+        [(8, Wide4), (9, Wide4)],
+        [(18, Wide4), (19, Wide4)],
+        [(22, Tall4), (20, Tall4)],
+        [(21, Wide4), (6, Wide4)],
+        [(15, Wide4), (12, Wide4)],
+        [(17, Wide4), (11, Wide4)],
+    ];
+    surface.paint(&gpu, |p| {
+        p.fill_rect((0.0, 0.0, 1320.0, 1230.0), crate::ui::gfx::rgba(0.025, 0.035, 0.06, 1.0))?;
+        for (i, items) in cases.iter().enumerate() {
+            let (x, y) = (10.0 + (i % 2) as f32 * 660.0, 10.0 + (i / 2) as f32 * 410.0);
+            ui.cfg.home_actions = items.iter().map(|v| v.0).collect();
+            ui.cfg.home_widget_sizes = items.iter().copied().collect();
+            ui.home.widgets = Default::default();
+            ui.live = if i == 1 {
+                vec![view::LiveActivity {
+                    kind: view::LiveKind::Reminder(1),
+                    title: "Заварить чай".into(),
+                    seconds: Some(180),
+                }]
+            } else {
+                Vec::new()
+            };
+            p.fill_round_rect((x, y, x + 640.0, y + 380.0), 28.0, crate::ui::gfx::rgba(0.0, 0.0, 0.0, 1.0))?;
+            view::paint_expanded(p, (x, y, 640.0, 380.0), 1.0, &ui, &[])?;
+        }
+        Ok(())
+    })?;
+    fn save(surface: &crate::ui::popup::PopupSurface, path: std::ffi::OsString, w: u32, h: u32) {
+        let pixels: Vec<u8> = surface.pixels().chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
+        let mut encoder = png::Encoder::new(std::fs::File::create(path).unwrap(), w, h);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
+    }
+    if let Some(path) = std::env::var_os("NI_TOOL_WIDGET_PREVIEW") {
+        save(&surface, path, 1320, 1230);
+    }
+    let settings = crate::ui::popup::PopupSurface::new((940, 820))?;
+    ui.sw.group = view::GROUPS.iter().position(|g| g.name == "Assistant").unwrap();
+    ui.sw.assistant_page = view::AssistantPage::Model;
+    ui.int.ai_key_saved = true;
+    ui.int.ai_check_key = ai::connection_key(&ui.cfg.ai);
+    ui.int.ai_check = Some(Err("The key was rejected".into()));
+    settings.paint(&gpu, |p| view::paint_settings_window(p, (940.0, 820.0), 1.0, &ui))?;
+    if let Some(path) = std::env::var_os("NI_AI_CHECK_PREVIEW") {
+        save(&settings, path, 940, 820);
+    }
+    ui.sw.group = view::GROUPS.iter().position(|g| g.name == "Game mode").unwrap();
+    crate::platform::game_mode::is_game(
+        &crate::platform::game_mode::Probe {
+            path: "C:\\Apps\\ChatGPT.exe".into(),
+            name: "ChatGPT.exe".into(),
+            fullscreen: true,
+            stamp: (0, 0),
+        },
+        false,
+        HWND::default(),
+    );
+    settings.paint(&gpu, |p| view::paint_settings_window(p, (940.0, 820.0), 1.0, &ui))?;
+    if let Some(path) = std::env::var_os("NI_GAME_MODE_PREVIEW") {
+        save(&settings, path, 940, 820);
     }
     Ok(())
 }
