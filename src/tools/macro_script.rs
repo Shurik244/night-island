@@ -104,11 +104,123 @@ pub enum Step {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Macro {
     pub name: String,
-    pub hotkey: Option<Combo>,
+    pub hotkey: Option<Hotkey>,
+    pub swallow: bool,
+    pub process: String,
+    pub window: String,
     pub method: Method,
     pub repeat: u32,
     pub target: String,
     pub steps: Vec<Step>,
+}
+
+const MAX_SCOPE_ITEMS: usize = 16;
+const MAX_SCOPE_CHARS: usize = 120;
+
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Scope {
+    pub processes: Vec<String>,
+    pub windows: Vec<String>,
+}
+
+fn scope_list(text: &str, process: bool) -> Vec<String> {
+    text.split('|')
+        .map(|item| item.trim().trim_matches('"').to_lowercase())
+        .filter(|item| !item.is_empty())
+        .map(|item| {
+            let item: String = item.chars().take(MAX_SCOPE_CHARS).collect();
+            if process && !item.contains('.') { format!("{item}.exe") } else { item }
+        })
+        .take(MAX_SCOPE_ITEMS)
+        .collect()
+}
+
+impl Scope {
+    pub fn new(process: &str, window: &str) -> Scope {
+        Scope { processes: scope_list(process, true), windows: scope_list(window, false) }
+    }
+
+    pub fn is_global(&self) -> bool {
+        self.processes.is_empty() && self.windows.is_empty()
+    }
+
+    pub fn matches(&self, exe: &str, title: &str) -> bool {
+        let exe = exe.to_lowercase();
+        let title = title.to_lowercase();
+        (self.processes.is_empty() || self.processes.contains(&exe))
+            && (self.windows.is_empty() || self.windows.iter().any(|w| title.contains(w.as_str())))
+    }
+}
+
+impl Macro {
+    pub fn scope(&self) -> Scope {
+        Scope::new(&self.process, &self.window)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Input {
+    Key(u16),
+    Mouse(Button),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hotkey {
+    Global(Combo),
+    Hook { mods: u32, input: Input },
+}
+
+fn mouse_number(button: Button) -> u8 {
+    match button {
+        Button::Left => 1,
+        Button::Right => 2,
+        Button::Middle => 3,
+        Button::X1 => 4,
+        Button::X2 => 5,
+    }
+}
+
+fn parse_mouse(name: &str) -> Option<Button> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "mouse1" | "lmb" => Some(Button::Left),
+        "mouse2" | "rmb" => Some(Button::Right),
+        "mouse3" | "mmb" => Some(Button::Middle),
+        "mouse4" | "xbutton1" => Some(Button::X1),
+        "mouse5" | "xbutton2" => Some(Button::X2),
+        _ => None,
+    }
+}
+
+impl Hotkey {
+    pub fn from_parts(mods: u32, input: Input) -> Hotkey {
+        if let Input::Key(vk) = input {
+            let combo = Combo::new(mods, vk as u32);
+            if combo.valid() {
+                return Hotkey::Global(combo);
+            }
+        }
+        Hotkey::Hook { mods, input }
+    }
+
+    pub fn text(self) -> String {
+        match self {
+            Hotkey::Global(combo) => combo.text(),
+            Hotkey::Hook { mods, input } => {
+                let mut out = String::new();
+                for (bit, name) in [(CTRL, "Ctrl"), (ALT, "Alt"), (SHIFT, "Shift"), (WIN, "Win")] {
+                    if mods & bit != 0 {
+                        out.push_str(name);
+                        out.push('+');
+                    }
+                }
+                match input {
+                    Input::Key(vk) => out.push_str(&key_name(vk)),
+                    Input::Mouse(button) => out.push_str(&format!("Mouse{}", mouse_number(button))),
+                }
+                out
+            }
+        }
+    }
 }
 
 impl Default for Macro {
@@ -116,6 +228,9 @@ impl Default for Macro {
         Self {
             name: String::new(),
             hotkey: None,
+            swallow: false,
+            process: String::new(),
+            window: String::new(),
             method: Method::Scan,
             repeat: 1,
             target: String::new(),
@@ -273,29 +388,29 @@ pub fn parse_combo(text: &str) -> Result<Vec<u16>, String> {
     Ok(keys)
 }
 
-pub fn parse_hotkey(text: &str) -> Result<Option<Combo>, String> {
+pub fn parse_hotkey(text: &str) -> Result<Option<Hotkey>, String> {
     let text = text.trim();
     if text.is_empty() || text.eq_ignore_ascii_case("none") || text.eq_ignore_ascii_case("not set") {
         return Ok(None);
     }
+    let tokens: Vec<&str> = text.split('+').map(str::trim).collect();
+    let modifier = |token: &str| match token.to_ascii_lowercase().as_str() {
+        "ctrl" | "control" => Some(CTRL),
+        "alt" => Some(ALT),
+        "shift" => Some(SHIFT),
+        "win" | "windows" => Some(WIN),
+        _ => None,
+    };
+    let (last, leading) = tokens.split_last().ok_or("a hotkey needs a main key")?;
     let mut mods = 0;
-    let mut vk = None;
-    for token in text.split('+') {
-        match token.trim().to_ascii_lowercase().as_str() {
-            "ctrl" | "control" => mods |= CTRL,
-            "alt" => mods |= ALT,
-            "shift" => mods |= SHIFT,
-            "win" | "windows" => mods |= WIN,
-            other => {
-                if vk.is_some() {
-                    return Err("a hotkey has one main key".into());
-                }
-                vk = Some(parse_key(other).ok_or_else(|| format!("unknown key \"{other}\""))? as u32);
-            }
-        }
+    for token in leading {
+        mods |= modifier(token).ok_or("only the last part of a hotkey may be a regular key")?;
     }
-    let combo = Combo::new(mods, vk.ok_or("a hotkey needs a main key")?);
-    if combo.valid() { Ok(Some(combo)) } else { Err("a hotkey needs a modifier and a regular key".into()) }
+    let input = match parse_mouse(last) {
+        Some(button) => Input::Mouse(button),
+        None => Input::Key(parse_key_or_code(last).ok_or_else(|| format!("unknown key \"{last}\""))?),
+    };
+    Ok(Some(Hotkey::from_parts(mods, input)))
 }
 
 fn strip_quotes(text: &str) -> &str {
@@ -526,6 +641,11 @@ pub fn parse(text: &str) -> Result<Macro, String> {
             match key.to_ascii_lowercase().as_str() {
                 "name" => out.name = value.trim().chars().take(80).collect(),
                 "hotkey" => out.hotkey = parse_hotkey(value).map_err(at)?,
+                "process" => out.process = value.trim().chars().take(400).collect(),
+                "window" => out.window = value.trim().chars().take(400).collect(),
+                "swallow" => {
+                    out.swallow = matches!(value.trim().to_ascii_lowercase().as_str(), "yes" | "true" | "on" | "1")
+                }
                 "method" => {
                     out.method = Method::parse(value).ok_or_else(|| at("method is scan, vk, legacy or post".into()))?
                 }
@@ -639,8 +759,17 @@ fn write_steps(out: &mut String, steps: &[Step], depth: usize) {
 
 pub fn to_text(m: &Macro) -> String {
     let mut out = format!("name: {}\n", m.name);
-    if let Some(combo) = m.hotkey {
-        out.push_str(&format!("hotkey: {}\n", combo.text()));
+    if let Some(hotkey) = m.hotkey {
+        out.push_str(&format!("hotkey: {}\n", hotkey.text()));
+        if m.swallow {
+            out.push_str("swallow: yes\n");
+        }
+    }
+    if !m.process.is_empty() {
+        out.push_str(&format!("process: {}\n", m.process));
+    }
+    if !m.window.is_empty() {
+        out.push_str(&format!("window: {}\n", m.window));
     }
     out.push_str(&format!("method: {}\n", m.method.id()));
     out.push_str(&format!("repeat: {}\n", if m.repeat == 0 { "forever".to_string() } else { m.repeat.to_string() }));
@@ -699,7 +828,7 @@ mod tests {
         let m = parse("name: Test\nhotkey: Ctrl+Alt+1\nmethod: vk\nrepeat: 3\n\nkey Ctrl+C\ndelay 50..120\nclick right 10 20\ntype Hi\\nthere\n")
             .unwrap();
         assert_eq!(m.name, "Test");
-        assert_eq!(m.hotkey, Some(Combo::new(CTRL | ALT, b'1' as u32)));
+        assert_eq!(m.hotkey, Some(Hotkey::Global(Combo::new(CTRL | ALT, b'1' as u32))));
         assert_eq!(m.method, Method::Vk);
         assert_eq!(m.repeat, 3);
         assert_eq!(m.steps.len(), 4);
@@ -723,7 +852,8 @@ mod tests {
         assert!(parse("key Ctrl+Nope").unwrap_err().starts_with("line 1"));
         assert!(parse("loop 2\nkey A").is_err());
         assert!(parse("end").is_err());
-        assert!(parse("hotkey: A").is_err());
+        assert!(parse("hotkey: Ctrl+Nope").is_err());
+        assert!(parse("hotkey: A+Ctrl").is_err());
     }
 
     #[test]
@@ -739,6 +869,36 @@ mod tests {
         assert_eq!(parse_duration("2s").unwrap(), 2000);
         assert_eq!(parse_duration("150ms").unwrap(), 150);
         assert!(parse_duration("99999999").is_err());
+    }
+
+    #[test]
+    fn single_keys_and_mouse_buttons_are_hook_hotkeys() {
+        let mouse = parse("hotkey: Mouse4\nswallow: yes\nkey A\n").unwrap();
+        assert_eq!(mouse.hotkey, Some(Hotkey::Hook { mods: 0, input: Input::Mouse(Button::X1) }));
+        assert!(mouse.swallow);
+        assert_eq!(parse(&to_text(&mouse)).unwrap(), mouse);
+        let bare = parse("hotkey: F8\nkey A\n").unwrap();
+        assert_eq!(bare.hotkey, Some(Hotkey::Hook { mods: 0, input: Input::Key(0x77) }));
+        let with_mods = parse("hotkey: Shift+Mouse5\nkey A\n").unwrap();
+        assert_eq!(with_mods.hotkey, Some(Hotkey::Hook { mods: SHIFT, input: Input::Mouse(Button::X2) }));
+        assert_eq!(parse(&to_text(&with_mods)).unwrap(), with_mods);
+        let combo = parse("hotkey: Ctrl+Alt+K\nkey A\n").unwrap();
+        assert!(matches!(combo.hotkey, Some(Hotkey::Global(_))));
+        assert_eq!(parse("hotkey: Shift\nkey A\n").unwrap().hotkey.map(Hotkey::text).as_deref(), Some("Shift"));
+    }
+
+    #[test]
+    fn scopes_match_process_and_window() {
+        let m = parse("hotkey: Mouse4\nprocess: Game | notepad\nwindow: Level 1\nkey A\n").unwrap();
+        let scope = m.scope();
+        assert!(!scope.is_global());
+        assert!(scope.matches("game.exe", "Super Level 1 - Game"));
+        assert!(scope.matches("NOTEPAD.EXE", "level 1"));
+        assert!(!scope.matches("game.exe", "Menu"));
+        assert!(!scope.matches("other.exe", "Level 1"));
+        assert_eq!(parse(&to_text(&m)).unwrap(), m);
+        assert!(parse("key A\n").unwrap().scope().is_global());
+        assert!(parse("process: a.exe\nkey A\n").unwrap().scope().matches("a.exe", ""));
     }
 
     #[test]
@@ -765,7 +925,7 @@ mod tests {
         let changed = set_header(text, "method", "post");
         assert_eq!(parse(&changed).unwrap().method, Method::Post);
         let added = set_header(text, "hotkey", "Ctrl+Alt+2");
-        assert_eq!(parse(&added).unwrap().hotkey, Some(Combo::new(CTRL | ALT, b'2' as u32)));
+        assert_eq!(parse(&added).unwrap().hotkey, Some(Hotkey::Global(Combo::new(CTRL | ALT, b'2' as u32))));
         let removed = set_header(&added, "hotkey", "");
         assert_eq!(parse(&removed).unwrap().hotkey, None);
         assert_eq!(parse(&removed).unwrap().steps.len(), 1);

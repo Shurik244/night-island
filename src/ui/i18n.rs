@@ -1017,8 +1017,8 @@ fn phrase(s: &str) -> Option<&'static str> {
         "Recording: everything you type and click is saved. Ctrl+Alt+F12 or Stop ends it" => {
             "Запись: сохраняется всё, что вы печатаете и нажимаете. Конец: Ctrl+Alt+F12 или «Стоп»"
         }
-        "Press the new combination (Esc cancels, Delete clears)" => {
-            "Нажмите новую комбинацию (Esc отмена, Delete очистить)"
+        "Press a key, a combination or a mouse button (Esc cancels, Delete clears)" => {
+            "Нажмите клавишу, комбинацию или кнопку мыши (Esc отмена, Delete очистить)"
         }
         "A hotkey needs a modifier and a regular key" => "Хоткею нужны модификатор и обычная клавиша",
         "The hotkey is cleared" => "Хоткей очищен",

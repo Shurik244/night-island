@@ -13,6 +13,7 @@ pub mod game_mode;
 pub mod gamepad;
 pub mod input_inject;
 pub mod input_record;
+pub mod input_trigger;
 pub mod localvoice;
 pub mod lockkeys;
 pub mod media;

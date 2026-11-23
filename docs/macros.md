@@ -33,7 +33,10 @@ Lines starting with `#` or `//` are comments, empty lines are ignored. Commands 
 | Line | Meaning |
 | --- | --- |
 | `name: Text` | Name shown in the list (up to 80 characters). The file name stays as it is. |
-| `hotkey: Ctrl+Alt+1` | Global hotkey that starts the macro. Needs at least one of Ctrl, Alt, Shift or Win and one regular key. Leave out or write `none` for no hotkey. |
+| `hotkey: Ctrl+Alt+1` | What starts the macro: a combination, a single key (`F8`, `X`) or a mouse button (`Mouse4`). See "Hotkeys". Leave out or write `none` for no hotkey. |
+| `swallow: yes` | Only for single keys and mouse buttons: the press is not passed on to the program under the cursor. Default `no`. |
+| `process: game.exe` | Only start the macro when the program in front is this one. Several: `game.exe \| other.exe`. Optional. See "Limit a macro to a program or window". |
+| `window: Level 1` | Only start the macro when the title of the front window contains this text (case-insensitive). Several: `A \| B`. Optional. |
 | `method: scan` | How keys are sent: `scan`, `vk`, `legacy` or `post`. See "Input methods". Default `scan`. |
 | `repeat: 3` | How many times the whole macro runs. `forever` (or `0`) repeats until you stop it. Default `1`. |
 | `target: Notepad` | Only for `method: post`: part of the title of the window that receives the keys. |
@@ -143,6 +146,27 @@ Limits that no method can get around:
 - A program running as administrator ignores input from a Night Island that does not run as administrator. Start Night Island as administrator for those.
 - Some games and anti-cheat systems block injected input altogether.
 
+## Limit a macro to a program or window
+
+Without `process:` and `window:` a macro is global: its trigger works everywhere. Add one or both lines to make it work only in some places:
+
+```
+name: Reload in the game
+hotkey: Mouse4
+process: game.exe
+window: My Game
+key R
+```
+
+- `process:` is the program's file name (`game.exe`; `.exe` may be left out). It is the program that owns the window that is in front.
+- `window:` is a part of the title of the front window, in any letter case.
+- With both lines both must match. With `|` any of the listed names matches (`process: chrome.exe | firefox.exe`).
+- The check happens when the trigger is pressed. Outside the scope nothing happens and the press goes to the program as usual, even with `swallow: yes`.
+- A macro with a scope uses the same watching hook as single keys, even when its hotkey is a normal combination such as `Ctrl+Alt+1`, so that the press can be passed on when it does not belong to the macro.
+- A global macro and a scoped macro may share a trigger: the scoped one wins in its program, the global one works everywhere else. Two global macros cannot share a trigger.
+- The **Run** button always runs the macro: it is meant for testing. While a scoped macro runs, its trigger can stop it only when its window is in front; the **Stop** button always works.
+- The island shows the scope next to the macro's name.
+
 ## Running and stopping
 
 - **Run** in the tab (the button becomes **Stop**), or press the macro's own hotkey.
@@ -154,7 +178,13 @@ Limits that no method can get around:
 
 ## Hotkeys
 
-Press **Hotkey**, then the new combination (Esc cancels, Delete clears). Or write the `hotkey:` line by hand: `Ctrl+Alt+1`, `Win+Shift+F5`, `Ctrl+Alt+Num5`. A combination already used by the system or another program is refused and reported.
+Press **Hotkey**, then the new key, combination or mouse button (Esc cancels, Delete clears; a mouse button is taken when you click it over the island). Or write the `hotkey:` line by hand.
+
+- **Combination with a modifier and a key**: `Ctrl+Alt+1`, `Win+Shift+F5`, `Ctrl+Alt+Num5`. These are registered with Windows. A combination already used by the system or another program is refused and reported.
+- **One key**: `F8`, `X`, `Space`, `Num0`, even a lone modifier such as `Shift`.
+- **A mouse button**: `Mouse1` (left), `Mouse2` (right), `Mouse3` (middle), `Mouse4` and `Mouse5` (the side buttons). Also `Shift+Mouse4`: the modifiers must be held, extra modifiers do not matter for a hotkey without any.
+
+Single keys and mouse buttons are watched with a low-level hook that only runs while at least one macro uses them. The macro starts when the button goes down, once per press (holding it does not repeat). The press is passed on to the program unless you add `swallow: yes`. Input that Night Island itself injects never triggers a macro, so a macro cannot start itself. Be careful with bare letters: the macro will fire whenever you type that letter, in any program. Two macros cannot share the same trigger.
 
 ## Recording
 
@@ -188,6 +218,19 @@ click left 960 540
 delay 80..140
 ```
 Press the hotkey again to stop it.
+
+**One mouse button as the trigger**
+```
+name: Click, Q, nudge down
+hotkey: Mouse4
+method: vk
+
+mousedown left
+mouseup left
+down Q
+up Q
+move rel 0 15
+```
 
 **Hold a key, then release**
 ```

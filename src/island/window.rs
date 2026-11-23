@@ -382,6 +382,27 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
             }
             LRESULT(0)
         }
+        WM_XBUTTONDOWN => {
+            let button = if (wparam.0 >> 16) & 0xFFFF == 2 {
+                crate::tools::macro_script::Button::X2
+            } else {
+                crate::tools::macro_script::Button::X1
+            };
+            with_app(|a| a.capture_macro_mouse(button));
+            LRESULT(1)
+        }
+        WM_MBUTTONDOWN => {
+            let mut captured = false;
+            with_app(|a| {
+                captured = a.ui.macros.capture;
+                a.capture_macro_mouse(crate::tools::macro_script::Button::Middle);
+            });
+            if captured { LRESULT(0) } else { unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) } }
+        }
+        crate::platform::input_trigger::WM_TRIGGER => {
+            with_app(|a| a.on_macro_trigger(wparam.0));
+            LRESULT(0)
+        }
         WM_MBUTTONUP => {
             let (x, y) = point_from(lparam);
             with_app(|a| {

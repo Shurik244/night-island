@@ -1,8 +1,8 @@
-use crate::data::keys::{ALT, CTRL, Combo, SHIFT, WIN};
+use crate::data::keys::{ALT, CTRL, SHIFT, WIN};
 use crate::island::*;
 use crate::platform::input_record;
 use crate::services::macros as store;
-use crate::tools::macro_script::{self, Method};
+use crate::tools::macro_script::{self, Button, Hotkey, Input, Method};
 
 impl App {
     pub(in crate::island) fn reload_macros(&mut self, keep: Option<&str>) {
@@ -20,6 +20,17 @@ impl App {
                 title: e.title(),
                 hotkey: e.parsed.as_ref().ok().and_then(|p| p.hotkey).map(|c| c.text()).unwrap_or_default(),
                 method: e.parsed.as_ref().map_or("Scan codes", |p| p.method.name()),
+                scope: e
+                    .parsed
+                    .as_ref()
+                    .ok()
+                    .map(|p| match (p.process.is_empty(), p.window.is_empty()) {
+                        (true, true) => String::new(),
+                        (false, true) => p.process.clone(),
+                        (true, false) => format!("\"{}\"", p.window),
+                        (false, false) => format!("{} \"{}\"", p.process, p.window),
+                    })
+                    .unwrap_or_default(),
                 broken: e.parsed.is_err(),
             })
             .collect();
@@ -142,7 +153,8 @@ impl App {
             view::ACT_HOTKEY => {
                 if self.selected_stem().is_some() {
                     self.ui.macros.capture = true;
-                    self.ui.macros.status = "Press the new combination (Esc cancels, Delete clears)".into();
+                    self.ui.macros.status =
+                        "Press a key, a combination or a mouse button (Esc cancels, Delete clears)".into();
                     self.begin_edit();
                 }
             }
@@ -222,7 +234,18 @@ impl App {
     }
 
     pub(in crate::island) fn on_macro_hotkey(&mut self, id: i32) {
-        let Some(stem) = store::stem_for_hotkey(id) else { return };
+        if let Some(stem) = store::stem_for_hotkey(id) {
+            self.run_macro_by_stem(stem);
+        }
+    }
+
+    pub(in crate::island) fn on_macro_trigger(&mut self, index: usize) {
+        if let Some(stem) = store::stem_for_trigger(index) {
+            self.run_macro_by_stem(stem);
+        }
+    }
+
+    fn run_macro_by_stem(&mut self, stem: String) {
         if store::running().as_deref() == Some(stem.as_str()) {
             return store::stop();
         }
@@ -284,8 +307,18 @@ impl App {
         }
     }
 
+    fn held_modifiers() -> u32 {
+        let down = |k: i32| unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(k) } < 0;
+        let mut mods = 0;
+        for (key, bit) in [(0x11, CTRL), (0x12, ALT), (0x10, SHIFT), (0x5B, WIN), (0x5C, WIN)] {
+            if down(key) {
+                mods |= bit;
+            }
+        }
+        mods
+    }
+
     pub(in crate::island) fn capture_macro_hotkey(&mut self, vk: u16) {
-        let down = |k: u16| unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(k as i32) } < 0;
         if matches!(vk, 0x10 | 0x11 | 0x12 | 0x5B | 0x5C | 0xA0..=0xA5) {
             return;
         }
@@ -295,22 +328,25 @@ impl App {
             self.end_edit(true);
             return self.repaint_expanded();
         }
-        let mut mods = 0;
-        for (key, bit) in [(0x11, CTRL), (0x12, ALT), (0x10, SHIFT), (0x5B, WIN), (0x5C, WIN)] {
-            if down(key) {
-                mods |= bit;
-            }
-        }
+        let mods = Self::held_modifiers();
         let value = if mods == 0 && matches!(vk, 0x08 | 0x2E) {
             String::new()
         } else {
-            let combo = Combo::new(mods, vk as u32);
-            if !combo.valid() {
-                self.ui.macros.status = "A hotkey needs a modifier and a regular key".into();
-                return self.repaint_expanded();
-            }
-            combo.text()
+            Hotkey::from_parts(mods, Input::Key(vk)).text()
         };
+        self.apply_macro_hotkey(value);
+    }
+
+    pub(in crate::island) fn capture_macro_mouse(&mut self, button: Button) {
+        if !self.ui.macros.capture {
+            return;
+        }
+        self.ui.macros.capture = false;
+        let value = Hotkey::from_parts(Self::held_modifiers(), Input::Mouse(button)).text();
+        self.apply_macro_hotkey(value);
+    }
+
+    fn apply_macro_hotkey(&mut self, value: String) {
         let text = macro_script::set_header(&self.ui.macros.editor.text(), "hotkey", &value);
         self.ui.macros.editor.set_text(&text);
         self.end_edit(true);

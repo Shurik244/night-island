@@ -5,6 +5,7 @@ pub struct MacroRow {
     pub title: String,
     pub hotkey: String,
     pub method: &'static str,
+    pub scope: String,
     pub broken: bool,
 }
 
@@ -183,7 +184,13 @@ pub(in crate::view) fn paint_macros(p: &Painter, pill: Rect, scale: f32, ui: &Ui
         let hotkey =
             if row.hotkey.is_empty() { crate::ui::i18n::tr("No hotkey").into_owned() } else { row.hotkey.clone() };
         p.text(
-            &format!("{}  ·  {}  ·  {}", row.title, hotkey, crate::ui::i18n::tr(row.method)),
+            &format!(
+                "{}  ·  {}  ·  {}{}",
+                row.title,
+                hotkey,
+                crate::ui::i18n::tr(row.method),
+                if row.scope.is_empty() { String::new() } else { format!("  ·  {}", row.scope) }
+            ),
             (pane.0, pane.1, pane.2, pane.1 + 20.0 * scale),
             12.0 * scale,
             DWRITE_FONT_WEIGHT_SEMI_BOLD,

@@ -14,7 +14,8 @@ use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::platform::gamepad::VirtualPad;
 use crate::platform::input_inject::{Injector, find_window, foreground_title_contains};
-use crate::tools::macro_script::{self, Button, Macro, Step};
+use crate::platform::input_trigger::{self, Trigger};
+use crate::tools::macro_script::{self, Button, Hotkey, Input, Macro, Step};
 
 pub const WM_MACRO: u32 = WM_APP + 132;
 pub const HOTKEY_BASE: i32 = 0x1000;
@@ -43,6 +44,7 @@ impl Entry {
 static RUN: Mutex<Option<(String, Arc<AtomicBool>)>> = Mutex::new(None);
 static STATUS: Mutex<Option<(String, Result<(), String>)>> = Mutex::new(None);
 static HOTKEYS: Mutex<Vec<(i32, String)>> = Mutex::new(Vec::new());
+static TRIGGER_STEMS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 pub fn dir() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("APPDATA")?).join("NightIsland").join("macros"))
@@ -269,22 +271,52 @@ pub fn register_hotkeys(hwnd: HWND, entries: &[Entry]) -> Vec<String> {
     unregister_hotkeys(hwnd);
     let mut failed = Vec::new();
     let mut registered = Vec::new();
+    let mut triggers = Vec::new();
+    let mut trigger_stems = Vec::new();
     for (index, entry) in entries.iter().enumerate() {
         let Ok(program) = &entry.parsed else { continue };
-        let Some(combo) = program.hotkey else { continue };
-        let id = HOTKEY_BASE + index as i32;
-        let ok =
-            unsafe { RegisterHotKey(Some(hwnd), id, HOT_KEY_MODIFIERS(combo.mods) | MOD_NOREPEAT, combo.vk).is_ok() };
-        if ok {
-            registered.push((id, entry.stem.clone()));
-        } else {
-            failed.push(entry.title());
+        let scope = program.scope();
+        let hotkey = match program.hotkey {
+            Some(Hotkey::Global(combo)) if !scope.is_global() => {
+                Some(Hotkey::Hook { mods: combo.mods, input: Input::Key(combo.vk as u16) })
+            }
+            other => other,
+        };
+        match hotkey {
+            None => {}
+            Some(Hotkey::Global(combo)) => {
+                let id = HOTKEY_BASE + index as i32;
+                let ok = unsafe {
+                    RegisterHotKey(Some(hwnd), id, HOT_KEY_MODIFIERS(combo.mods) | MOD_NOREPEAT, combo.vk).is_ok()
+                };
+                if ok {
+                    registered.push((id, entry.stem.clone()));
+                } else {
+                    failed.push(entry.title());
+                }
+            }
+            Some(Hotkey::Hook { mods, input }) => {
+                if triggers.iter().any(|t: &Trigger| t.input == input && t.mods == mods && t.scope == scope) {
+                    failed.push(entry.title());
+                    continue;
+                }
+                triggers.push(Trigger { mods, input, swallow: program.swallow, scope });
+                trigger_stems.push(entry.stem.clone());
+            }
         }
     }
     if let Ok(mut slot) = HOTKEYS.lock() {
         *slot = registered;
     }
+    if let Ok(mut slot) = TRIGGER_STEMS.lock() {
+        *slot = trigger_stems;
+    }
+    input_trigger::configure(hwnd, triggers);
     failed
+}
+
+pub fn stem_for_trigger(index: usize) -> Option<String> {
+    TRIGGER_STEMS.lock().ok()?.get(index).cloned()
 }
 
 pub fn unregister_hotkeys(hwnd: HWND) {

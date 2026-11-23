@@ -97,6 +97,33 @@ pub fn find_window(title: &str) -> Option<HWND> {
     search.found
 }
 
+pub fn foreground_info() -> Option<(String, String)> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    };
+    use windows::core::PWSTR;
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        return None;
+    }
+    let mut title = [0u16; 256];
+    let n = unsafe { GetWindowTextW(hwnd, &mut title) } as usize;
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    let exe = unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buffer = [0u16; 520];
+        let mut length = buffer.len() as u32;
+        let result = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buffer.as_mut_ptr()), &mut length);
+        let _ = CloseHandle(process);
+        result.ok()?;
+        String::from_utf16_lossy(&buffer[..length as usize])
+    };
+    let name = exe.rsplit(['\\', '/']).next().unwrap_or("").to_string();
+    Some((name, String::from_utf16_lossy(&title[..n])))
+}
+
 pub fn foreground_title_contains(title: &str) -> bool {
     let needle = title.trim().to_lowercase();
     let hwnd = unsafe { GetForegroundWindow() };
