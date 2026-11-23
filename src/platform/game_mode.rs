@@ -154,6 +154,47 @@ fn known_game(path: &str) -> bool {
             | "robloxplayerbeta.exe"
     )
 }
+fn covers(r: RECT, m: RECT) -> bool {
+    m.right > m.left
+        && m.bottom > m.top
+        && r.left <= m.left + 2
+        && r.top <= m.top + 2
+        && r.right >= m.right - 2
+        && r.bottom >= m.bottom - 2
+}
+fn fullscreen_geometry(rect: RECT, client: Option<RECT>, m: RECT, style: u32, zoomed: bool, exclusive: bool) -> bool {
+    let caption = style & WS_CAPTION.0 == WS_CAPTION.0;
+    let framed = style & (WS_CAPTION.0 | WS_THICKFRAME.0) != 0;
+    if zoomed && framed && !exclusive {
+        return false;
+    }
+    client.is_some_and(|c| covers(c, m)) || ((!caption || exclusive) && covers(rect, m))
+}
+fn shell_utility(path: &str) -> bool {
+    matches!(
+        basename(path).as_str(),
+        "night-island.exe"
+            | "explorer.exe"
+            | "dwm.exe"
+            | "svchost.exe"
+            | "applicationframehost.exe"
+            | "shellexperiencehost.exe"
+            | "startmenuexperiencehost.exe"
+            | "searchhost.exe"
+            | "runtimebroker.exe"
+            | "wallpaper32.exe"
+            | "wallpaper64.exe"
+            | "mydockfinder.exe"
+            | "dock_64.exe"
+            | "finder.exe"
+    )
+}
+fn fullscreen_hides_for(saved: &Saved, path: &str) -> bool {
+    saved.rules.get(path) != Some(&false) && !shell_utility(path)
+}
+pub fn hides_when_fullscreen(path: &str) -> bool {
+    fullscreen_hides_for(&state().lock().unwrap_or_else(|e| e.into_inner()).saved, path)
+}
 pub fn foreground() -> Option<Probe> {
     unsafe {
         let hwnd = GetForegroundWindow();
@@ -203,14 +244,20 @@ pub fn foreground() -> Option<Probe> {
             && GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut monitor).as_bool()
         {
             let m = monitor.rcMonitor;
-            let caption = GetWindowLongW(hwnd, GWL_STYLE) as u32 & WS_CAPTION.0 == WS_CAPTION.0;
+            let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
             let exclusive = windows::Win32::UI::Shell::SHQueryUserNotificationState()
                 .is_ok_and(|s| s == windows::Win32::UI::Shell::QUNS_RUNNING_D3D_FULL_SCREEN);
-            fullscreen = (!caption || exclusive)
-                && rect.left <= m.left + 2
-                && rect.top <= m.top + 2
-                && rect.right >= m.right - 2
-                && rect.bottom >= m.bottom - 2;
+            let mut client = RECT::default();
+            let mut origin = windows::Win32::Foundation::POINT::default();
+            let client_screen = (GetClientRect(hwnd, &mut client).is_ok()
+                && ClientToScreen(hwnd, &mut origin).as_bool())
+            .then_some(RECT {
+                left: origin.x,
+                top: origin.y,
+                right: origin.x + client.right,
+                bottom: origin.y + client.bottom,
+            });
+            fullscreen = fullscreen_geometry(rect, client_screen, m, style, IsZoomed(hwnd).as_bool(), exclusive);
         }
         Some(Probe { path, name, fullscreen, stamp })
     }
@@ -459,6 +506,42 @@ mod tests {
             assert!(!matches!(probe.name.as_str(), "dwm.exe" | "night-island.exe"));
         }
         assert_eq!(parsed(r#"{"is_game":true,"confidence":1.1}"#), None);
+    }
+    #[test]
+    fn any_fullscreen_window_hides_the_island_except_shell_parts_and_your_app_rules() {
+        let mut saved = Saved::default();
+        assert!(fullscreen_hides_for(&saved, r"c:\games\dota2.exe"));
+        assert!(fullscreen_hides_for(&saved, r"c:\apps\parsecd.exe"));
+        assert!(fullscreen_hides_for(&saved, r"c:\browser\chrome.exe"));
+        assert!(!fullscreen_hides_for(&saved, r"c:\windows\explorer.exe"));
+        assert!(!fullscreen_hides_for(&saved, r"c:\tools\Wallpaper64.exe"));
+        saved.rules.insert(r"c:\apps\remote.exe".into(), false);
+        assert!(!fullscreen_hides_for(&saved, r"c:\apps\remote.exe"));
+        saved.rules.insert(r"c:\apps\remote.exe".into(), true);
+        assert!(fullscreen_hides_for(&saved, r"c:\apps\remote.exe"));
+    }
+
+    #[test]
+    fn maximized_framed_windows_are_not_full_screen_but_borderless_ones_are() {
+        let m = RECT { left: 0, top: 0, right: 1920, bottom: 1080 };
+        let chrome_rect = RECT { left: -8, top: -8, right: 1928, bottom: 1088 };
+        let framed = WS_CAPTION.0 | WS_THICKFRAME.0 | WS_VISIBLE.0;
+        assert!(!fullscreen_geometry(chrome_rect, Some(m), m, framed, true, false));
+        assert!(!fullscreen_geometry(chrome_rect, Some(m), m, WS_THICKFRAME.0, true, false));
+        assert!(fullscreen_geometry(m, Some(m), m, WS_POPUP.0, false, false));
+        assert!(fullscreen_geometry(m, Some(m), m, WS_POPUP.0, true, false));
+        assert!(fullscreen_geometry(chrome_rect, Some(m), m, framed, false, false));
+        assert!(fullscreen_geometry(chrome_rect, Some(m), m, framed, true, true));
+        let normal = RECT { left: 100, top: 100, right: 900, bottom: 700 };
+        assert!(!fullscreen_geometry(normal, Some(normal), m, framed, false, false));
+    }
+    #[test]
+    fn a_client_area_that_fills_the_monitor_counts_even_with_a_caption_style() {
+        let monitor = RECT { left: 0, top: 0, right: 1920, bottom: 1080 };
+        assert!(covers(RECT { left: 0, top: 0, right: 1920, bottom: 1080 }, monitor));
+        assert!(covers(RECT { left: -1, top: -1, right: 1921, bottom: 1081 }, monitor));
+        assert!(!covers(RECT { left: 0, top: 31, right: 1920, bottom: 1080 }, monitor));
+        assert!(!covers(RECT { left: 0, top: 0, right: 1920, bottom: 1040 }, monitor));
     }
     #[test]
     fn common_desktop_apps_and_launchers_are_not_games() {

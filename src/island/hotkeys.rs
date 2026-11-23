@@ -67,7 +67,12 @@ impl App {
         }
         let gaming = crate::platform::game_mode::foreground().is_some_and(|probe| {
             let game = crate::platform::game_mode::is_game(&probe, self.settings.game_ai, self.hwnd);
-            self.state != State::Expanded && game && (probe.fullscreen || self.settings.game_windowed)
+            let hide = if probe.fullscreen {
+                game || crate::platform::game_mode::hides_when_fullscreen(&probe.path)
+            } else {
+                game && self.settings.game_windowed
+            };
+            self.state != State::Expanded && hide
         });
         self.set_gaming(gaming);
         let looks = SETTLE_LOOKS.load(std::sync::atomic::Ordering::Relaxed);
