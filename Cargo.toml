@@ -1,6 +1,6 @@
 [package]
 name = "night-island"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "Night Island: a lightweight Dynamic Island for Windows"
 publish = false
