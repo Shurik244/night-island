@@ -40,12 +40,18 @@ pub(in crate::view) const CTL_SMALL_H: f32 = 60.0;
 
 pub(in crate::view) const CTL_GAP: f32 = 12.0;
 
-pub(in crate::view) fn ctl_rect(pill: Rect, scale: f32, i: usize) -> Rect {
+const CTL_ICON_W: f32 = 60.0;
+
+pub(in crate::view) fn ctl_rect(pill: Rect, scale: f32, i: usize, devices: bool) -> Rect {
     let (x, y, w, _) = pill;
     let side = SIDE_PAD * scale;
     let gap = CTL_GAP * scale;
     let (cols, col) = if i < CTL_COLS { (CTL_COLS, i) } else { (CTL_SMALL_COLS, i - CTL_COLS) };
-    let tile_w = (w - 2.0 * side - (cols - 1) as f32 * gap) / cols as f32;
+    let tile_w = if devices && i >= CTL_COLS {
+        CTL_ICON_W * scale
+    } else {
+        (w - 2.0 * side - (cols - 1) as f32 * gap) / cols as f32
+    };
     let left = x + side + col as f32 * (tile_w + gap);
     let (top, h) = if i < CTL_COLS {
         (y + 62.0 * scale, CTL_BIG_H * scale)
@@ -55,13 +61,14 @@ pub(in crate::view) fn ctl_rect(pill: Rect, scale: f32, i: usize) -> Rect {
     (left, top, left + tile_w, top + h)
 }
 
-pub fn hit_ctl(pill: Rect, scale: f32, px: f32, py: f32) -> Option<usize> {
-    (0..CTLS.len()).find(|&i| inside(ctl_rect(pill, scale, i), px, py))
+pub fn hit_ctl(pill: Rect, scale: f32, px: f32, py: f32, devices: bool) -> Option<usize> {
+    (0..CTLS.len()).find(|&i| inside(ctl_rect(pill, scale, i, devices), px, py))
 }
 
 pub(in crate::view) fn paint_controls(p: &Painter, pill: Rect, scale: f32, ui: &UiState) -> Result<()> {
+    let devices = !ui.peripherals.is_empty();
     for (i, (ctl, glyph, label)) in CTLS.iter().enumerate() {
-        let r = ctl_rect(pill, scale, i);
+        let r = ctl_rect(pill, scale, i, devices);
         let (l, t, rr, b) = r;
         let state = match ctl {
             Ctl::WiFi => Some(ui.radios.wifi),
@@ -147,6 +154,9 @@ pub(in crate::view) fn paint_controls(p: &Painter, pill: Rect, scale: f32, ui: &
                 DWRITE_TEXT_ALIGNMENT_LEADING,
                 rgba(1.0, 1.0, 1.0, DIM),
             )?;
+        } else if devices {
+            let alpha = if armed { 1.0 } else { 0.85 };
+            p.glyph(*glyph, r, 20.0 * scale, rgba(1.0, 1.0, 1.0, alpha))?;
         } else {
             let alpha = if armed { 1.0 } else { 0.85 };
             p.glyph(*glyph, (l, t + 10.0 * scale, rr, t + 38.0 * scale), 20.0 * scale, rgba(1.0, 1.0, 1.0, alpha))?;
@@ -163,38 +173,39 @@ pub(in crate::view) fn paint_controls(p: &Painter, pill: Rect, scale: f32, ui: &
     Ok(())
 }
 
-pub(in crate::view) const DEVICES_H: f32 = 44.0;
-
 const DEVICES_SHOWN: usize = 4;
 
-pub(in crate::view) fn devices_row_top(pill: Rect, scale: f32) -> f32 {
+pub(in crate::view) fn below_tiles_top(pill: Rect, scale: f32) -> f32 {
     pill.1 + (62.0 + CTL_BIG_H + CTL_GAP + CTL_SMALL_H + CTL_GAP) * scale
 }
 
-pub(in crate::view) fn devices_row_space(pill: Rect, scale: f32, ui: &UiState) -> f32 {
-    let fits = devices_row_top(pill, scale) + DEVICES_H * scale <= pill.1 + pill.3 - 14.0 * scale;
-    if ui.peripherals.is_empty() || !fits { 0.0 } else { (DEVICES_H + CTL_GAP) * scale }
+pub(in crate::view) fn devices_rect(pill: Rect, scale: f32) -> Rect {
+    let last = ctl_rect(pill, scale, CTLS.len() - 1, true);
+    (last.2 + CTL_GAP * scale, last.1, pill.0 + pill.2 - SIDE_PAD * scale, last.3)
 }
 
-pub(in crate::view) fn paint_devices_row(p: &Painter, pill: Rect, scale: f32, ui: &UiState) -> Result<()> {
-    if devices_row_space(pill, scale, ui) <= 0.0 {
+pub(in crate::view) fn paint_devices(p: &Painter, pill: Rect, scale: f32, ui: &UiState) -> Result<()> {
+    if ui.peripherals.is_empty() {
         return Ok(());
     }
-    let (x, _, w, _) = pill;
-    let side = SIDE_PAD * scale;
-    let top = devices_row_top(pill, scale);
-    let panel = (x + side, top, x + w - side, top + DEVICES_H * scale);
-    p.fill_round_rect(panel, 16.0 * scale, rgba(1.0, 1.0, 1.0, 0.06))?;
+    let panel = devices_rect(pill, scale);
+    p.fill_round_rect(panel, 20.0 * scale, rgba(1.0, 1.0, 1.0, 0.08))?;
     let extra = ui.peripherals.len().saturating_sub(DEVICES_SHOWN);
     let shown = &ui.peripherals[..ui.peripherals.len().min(DEVICES_SHOWN)];
-    let cell_w = (panel.2 - panel.0) / shown.len() as f32;
+    let (cols, rows) = if shown.len() <= 2 { (1, shown.len()) } else { (2, 2) };
+    let cell_w = (panel.2 - panel.0) / cols as f32;
+    let pad = 6.0 * scale;
+    let cell_h = (panel.3 - panel.1 - 2.0 * pad) / rows as f32;
     let line = rgba(1.0, 1.0, 1.0, 0.09);
+    if cols > 1 {
+        let lx = panel.0 + cell_w;
+        p.fill_rect((lx - 0.5, panel.1 + 10.0 * scale, lx + 0.5, panel.3 - 10.0 * scale), line)?;
+    }
     for (i, d) in shown.iter().enumerate() {
-        let l = panel.0 + i as f32 * cell_w;
+        let l = panel.0 + (i / rows) as f32 * cell_w;
         let r = l + cell_w;
-        if i > 0 {
-            p.fill_rect((l - 0.5, panel.1 + 10.0 * scale, l + 0.5, panel.3 - 10.0 * scale), line)?;
-        }
+        let t = panel.1 + pad + (i % rows) as f32 * cell_h;
+        let b = t + cell_h;
         let color = if d.low() {
             rgba(1.0, 0.45, 0.45, 1.0)
         } else if d.charging {
@@ -202,18 +213,13 @@ pub(in crate::view) fn paint_devices_row(p: &Painter, pill: Rect, scale: f32, ui
         } else {
             WHITE
         };
-        p.glyph(
-            d.glyph(),
-            (l + 8.0 * scale, panel.1, l + 34.0 * scale, panel.3),
-            16.0 * scale,
-            rgba(1.0, 1.0, 1.0, 0.85),
-        )?;
+        p.glyph(d.glyph(), (l + 8.0 * scale, t, l + 34.0 * scale, b), 15.0 * scale, rgba(1.0, 1.0, 1.0, 0.85))?;
         let more = if i + 1 == shown.len() && extra > 0 { format!("  +{extra}") } else { String::new() };
         let level = if d.charging { format!("\u{26A1}{}%{more}", d.percent) } else { format!("{}%{more}", d.percent) };
         let level_w = (48.0 + if d.charging { 16.0 } else { 0.0 } + if more.is_empty() { 0.0 } else { 26.0 }) * scale;
         p.text(
             &d.name,
-            (l + 36.0 * scale, panel.1, r - level_w, panel.3),
+            (l + 36.0 * scale, t, r - level_w, b),
             12.5 * scale,
             DWRITE_FONT_WEIGHT_SEMI_BOLD,
             DWRITE_TEXT_ALIGNMENT_LEADING,
@@ -221,7 +227,7 @@ pub(in crate::view) fn paint_devices_row(p: &Painter, pill: Rect, scale: f32, ui
         )?;
         p.text(
             &level,
-            (r - level_w, panel.1, r - 10.0 * scale, panel.3),
+            (r - level_w, t, r - 12.0 * scale, b),
             13.0 * scale,
             DWRITE_FONT_WEIGHT_BOLD,
             DWRITE_TEXT_ALIGNMENT_TRAILING,

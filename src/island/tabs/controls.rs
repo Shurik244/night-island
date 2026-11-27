@@ -7,7 +7,9 @@ impl App {
     }
 
     pub(in crate::island) fn click_ctl(&mut self, x: i32, y: i32) {
-        let Some(i) = view::hit_ctl(self.pill_rect(true), self.scale, x as f32, y as f32) else {
+        let Some(i) =
+            view::hit_ctl(self.pill_rect(true), self.scale, x as f32, y as f32, !self.ui.peripherals.is_empty())
+        else {
             self.disarm();
             self.repaint_expanded();
             return;

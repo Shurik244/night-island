@@ -889,6 +889,22 @@ fn wireless_devices_preview() -> Result<()> {
         device("G915 TKL", Kind::Keyboard, Link::Radio, 12, false),
         device("WH-1000XM5", Kind::Other, Link::Bluetooth, 55, true),
     ];
+    ui.metrics.push(
+        metrics::Sample {
+            cpu: 5.0,
+            ram: 28.0,
+            ram_used: 9 * 1024 * 1024 * 1024,
+            ram_total: 32 * 1024 * 1024 * 1024,
+            gpu: Some(5.0),
+            disk: 96.0,
+            disk_used: 490 * 1024 * 1024 * 1024,
+            disk_total: 512 * 1024 * 1024 * 1024,
+            net_down: 7000.0,
+            net_up: 1000.0,
+            uptime: 8900,
+        },
+        &[],
+    );
     surface.paint(&gpu, |p| {
         p.fill_rect((0.0, 0.0, 680.0, 520.0), crate::ui::gfx::rgba(0.025, 0.035, 0.06, 1.0))?;
         p.fill_round_rect((20.0, 20.0, 660.0, 400.0), 28.0, crate::ui::gfx::rgba(0.0, 0.0, 0.0, 1.0))?;

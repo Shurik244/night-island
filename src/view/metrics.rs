@@ -105,7 +105,7 @@ pub(in crate::view) fn paint_metrics_row(p: &Painter, pill: Rect, scale: f32, ui
     let Some(sample) = ui.metrics.sample.as_ref().filter(|_| !shown.is_empty()) else { return Ok(()) };
     let list = cells(&shown);
     let side = SIDE_PAD * scale;
-    let top = devices_row_top(pill, scale) + devices_row_space(pill, scale, ui);
+    let top = below_tiles_top(pill, scale);
     let bottom = y + h - 14.0 * scale;
     let avail = bottom - top;
     if avail < 30.0 * scale {

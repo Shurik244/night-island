@@ -255,7 +255,11 @@ impl App {
             }
             _ => None,
         };
-        let hover_ctl = if self.ui.tab == view::Tab::Controls { view::hit_ctl(pill, self.scale, fx, fy) } else { None };
+        let hover_ctl = if self.ui.tab == view::Tab::Controls {
+            view::hit_ctl(pill, self.scale, fx, fy, !self.ui.peripherals.is_empty())
+        } else {
+            None
+        };
         let hover_note = if self.ui.tab == view::Tab::Note {
             view::hit_note_tree(pill, self.scale, fx, fy, &self.ui)
                 .or_else(|| view::hit_note_panel(pill, self.scale, fx, fy, &self.ui))
