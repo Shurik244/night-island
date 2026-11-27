@@ -854,3 +854,56 @@ fn native_tool_widgets_and_assistant_settings_preview() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "Renders the wireless devices row and pill slot using real Direct2D"]
+fn wireless_devices_preview() -> Result<()> {
+    use crate::platform::peripherals::{Device, Kind, Link};
+    unsafe {
+        RoInitialize(RO_INIT_SINGLETHREADED)?;
+    }
+    let _queue = unsafe {
+        CreateDispatcherQueueController(DispatcherQueueOptions {
+            dwSize: size_of::<DispatcherQueueOptions>() as u32,
+            threadType: DQTYPE_THREAD_CURRENT,
+            apartmentType: DQTAT_COM_NONE,
+        })?
+    };
+    let compositor = Compositor::new()?;
+    let gpu = Gpu::new(&compositor)?;
+    let surface = crate::ui::popup::PopupSurface::new((680, 520))?;
+    let mut ui = view::UiState::new();
+    ui.cfg.island_animations = false;
+    ui.cfg.pill_devices = true;
+    ui.tab = view::Tab::Controls;
+    let device = |name: &str, kind, link, percent, charging| Device {
+        key: name.into(),
+        name: name.into(),
+        kind,
+        link,
+        percent,
+        charging,
+    };
+    ui.peripherals = vec![
+        device("Беспроводная мышь", Kind::Mouse, Link::Radio, 80, false),
+        device("G915 TKL", Kind::Keyboard, Link::Radio, 12, false),
+        device("WH-1000XM5", Kind::Other, Link::Bluetooth, 55, true),
+    ];
+    surface.paint(&gpu, |p| {
+        p.fill_rect((0.0, 0.0, 680.0, 520.0), crate::ui::gfx::rgba(0.025, 0.035, 0.06, 1.0))?;
+        p.fill_round_rect((20.0, 20.0, 660.0, 400.0), 28.0, crate::ui::gfx::rgba(0.0, 0.0, 0.0, 1.0))?;
+        view::paint_expanded(p, (20.0, 20.0, 640.0, 380.0), 1.0, &ui, &[])?;
+        let w = view::collapsed_width(&ui, 200.0);
+        p.fill_round_rect((20.0, 440.0, 20.0 + w, 476.0), 18.0, crate::ui::gfx::rgba(0.0, 0.0, 0.0, 1.0))?;
+        view::paint_collapsed(p, (20.0, 440.0, w, 36.0), 1.0, &ui)?;
+        Ok(())
+    })?;
+    if let Some(path) = std::env::var_os("NI_DEVICES_PREVIEW") {
+        let pixels: Vec<u8> = surface.pixels().chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
+        let mut encoder = png::Encoder::new(std::fs::File::create(path).unwrap(), 680, 520);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
+    }
+    Ok(())
+}

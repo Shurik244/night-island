@@ -83,6 +83,25 @@ impl App {
         }
     }
 
+    pub(in crate::island) fn on_peripherals(&mut self) {
+        let now = crate::platform::peripherals::latest();
+        for d in &now {
+            let before = self.ui.peripherals.iter().find(|b| b.key == d.key);
+            if d.low() && !before.is_some_and(|b| b.low()) {
+                let message = format!("{} · {} · {}%", crate::ui::i18n::tr("Battery low"), d.name, d.percent);
+                self.notify_for(Notice::Devices, d.glyph(), &message, 5000);
+            }
+        }
+        self.ui.peripherals = now;
+        if self.settings.pill_devices {
+            self.update_eq();
+            self.repaint_collapsed();
+        }
+        if self.state == State::Expanded && self.ui.tab == view::Tab::Controls {
+            self.repaint_expanded();
+        }
+    }
+
     pub(in crate::island) fn toggle_mic(&mut self) {
         let Some(muted) = volume::mic_toggle() else {
             return self.notify(Notice::Error, '\u{E720}', "No microphone found");

@@ -224,6 +224,7 @@ pub struct UiState {
     pub steam: SteamUi,
     pub metrics: MetricsUi,
     pub agents: Vec<crate::services::agents::Session>,
+    pub peripherals: Vec<crate::platform::peripherals::Device>,
 }
 
 impl UiState {
@@ -244,6 +245,7 @@ impl UiState {
             steam: SteamUi::default(),
             metrics: MetricsUi::default(),
             agents: Vec::new(),
+            peripherals: Vec::new(),
             cmd: CommandUi::default(),
             remind: RemindUi::default(),
             int: IntegrationsUi::default(),

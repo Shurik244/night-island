@@ -149,6 +149,7 @@ pub fn radios_async(hwnd: HWND, change: Option<(RadioSwitch, bool)>) {
             snapshot(change).unwrap_or_default()
         };
         crate::platform::bt_battery::refresh();
+        crate::platform::peripherals::refresh_soon();
         unsafe {
             let hwnd = HWND(raw as *mut c_void);
             let _ = PostMessageW(Some(hwnd), WM_RADIOS, WPARAM(pack(radios)), LPARAM(0));

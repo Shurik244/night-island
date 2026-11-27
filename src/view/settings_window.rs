@@ -76,12 +76,13 @@ const APPEARANCE: [(Sid, &str, Kind); 10] = [
     (Sid::TextLayout, "Text tools", Kind::Cycle),
 ];
 
-const PILL: [(Sid, &str, Kind); 23] = [
+const PILL: [(Sid, &str, Kind); 24] = [
     (Sid::PillUnifiedLayout, "Balanced pill layout", Kind::Toggle),
     (Sid::VpnPill, "VPN shield and button (Happ)", Kind::Toggle),
     (Sid::PillWeather, "Weather on the pill", Kind::Toggle),
     (Sid::PillWeatherSide, "Weather position", Kind::Cycle),
     (Sid::PillBattery, "Battery on the pill", Kind::Cycle),
+    (Sid::PillDevices, "Wireless devices on the pill", Kind::Toggle),
     (Sid::MusicEq, "Equalizer", Kind::Toggle),
     (Sid::MusicTitle, "Track title", Kind::Toggle),
     (Sid::MusicCover, "Cover art on the pill", Kind::Toggle),
@@ -102,7 +103,7 @@ const PILL: [(Sid, &str, Kind); 23] = [
     (Sid::SpikeColor, "Spike tips in track colour", Kind::Toggle),
 ];
 
-const NOTIFICATIONS: [(Sid, &str, Kind); 20] = [
+const NOTIFICATIONS: [(Sid, &str, Kind); 21] = [
     (Sid::SystemNotifications, "Windows notifications from the island", Kind::Toggle),
     (Sid::NotificationTiles, "Notification preview size", Kind::Cycle),
     (Sid::NotificationOpenApp, "Click a notification to open its app", Kind::Toggle),
@@ -119,6 +120,7 @@ const NOTIFICATIONS: [(Sid, &str, Kind); 20] = [
     (Sid::NotifyClipboardText, "Show the copied text", Kind::Toggle),
     (Sid::NotifyLockKeys, "Caps, Num and Scroll Lock", Kind::Toggle),
     (Sid::NotifyBattery, "Charger and low battery", Kind::Toggle),
+    (Sid::NotifyDevices, "Wireless devices low battery", Kind::Toggle),
     (Sid::NotifyUpdate, "New version available", Kind::Toggle),
     (Sid::NotifyPrivacy, "Screen capture by other programs", Kind::Toggle),
     (Sid::NotifyAgents, "Coding agents (waiting, finished)", Kind::Toggle),

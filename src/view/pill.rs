@@ -296,6 +296,12 @@ pub(in crate::view) const METRICS_CHAR_W: f32 = 6.6;
 
 pub(in crate::view) const SLOT_GAP: f32 = 8.0;
 
+pub(in crate::view) const DEVICES_SLOT: f32 = 50.0;
+
+pub(in crate::view) fn devices_slot(ui: &UiState) -> Option<f32> {
+    (ui.cfg.pill_devices && !ui.peripherals.is_empty()).then_some(DEVICES_SLOT)
+}
+
 pub(in crate::view) fn battery_slot(ui: &UiState) -> Option<f32> {
     battery()?;
     match ui.cfg.pill_battery {
@@ -317,6 +323,7 @@ pub struct MusicSlots {
     pub agent: Option<(f32, f32)>,
     pub clock: (f32, f32),
     pub battery: Option<(f32, f32)>,
+    pub devices: Option<(f32, f32)>,
     pub width: f32,
 }
 
@@ -342,11 +349,12 @@ pub fn music_slots(ui: &UiState, scale: f32, pill_w: f32) -> MusicSlots {
     let agent = agents_active(ui).then_some(AGENT_SLOT);
     let metrics = pill_metrics_on(&ui.cfg).then(|| pill_chars(&ui.cfg.metrics_pill) as f32 * METRICS_CHAR_W + 4.0);
     let battery = battery_slot(ui);
+    let devices = devices_slot(ui);
     let clock_width =
         crate::ui::fonts::width(ui.cfg.interface_font, "88:88", clock_text_size(ui), DWRITE_FONT_WEIGHT_SEMI_BOLD)
             .ceil()
             + 2.0;
-    let widths = [cover, weather, bars, title, lyric, rec, live, agent, metrics, Some(clock_width), battery];
+    let widths = [cover, weather, bars, title, lyric, rec, live, agent, metrics, Some(clock_width), battery, devices];
     let weather_before = ui.cfg.pill_weather_side == crate::data::settings::WeatherSide::Left;
     let count = widths.iter().flatten().count() as f32;
     let content: f32 = widths.iter().flatten().sum::<f32>() + SLOT_GAP * (count - 1.0).max(0.0)
@@ -374,7 +382,8 @@ pub fn music_slots(ui: &UiState, scale: f32, pill_w: f32) -> MusicSlots {
     let clock = place(Some(clock_width), clock_gap).unwrap_or((0.0, 0.0));
     let weather = weather_left.or_else(|| if weather_before { None } else { place(weather, SLOT_GAP) });
     let battery = place(battery, SLOT_GAP);
-    MusicSlots { cover, weather, bars, title, lyric, rec, live, agent, metrics, clock, battery, width }
+    let devices = place(devices, SLOT_GAP);
+    MusicSlots { cover, weather, bars, title, lyric, rec, live, agent, metrics, clock, battery, devices, width }
 }
 
 pub(in crate::view) fn downloading_label(name: &str) -> String {
@@ -781,6 +790,18 @@ fn paint_collapsed_body(p: &Painter, pill: Rect, scale: f32, ui: &UiState) -> Re
     )?;
     if let Some((off, width)) = slots.battery {
         paint_pill_battery(x + off, x + off + width)?;
+    }
+    if let (Some((off, width)), Some(d)) = (slots.devices, crate::platform::peripherals::lowest(&ui.peripherals)) {
+        let color = if d.low() { rgba(1.0, 0.45, 0.45, 1.0) } else { rgba(1.0, 1.0, 1.0, DIM) };
+        p.glyph(d.glyph(), (x + off, y, x + off + 18.0 * scale, y + h), 13.0 * scale, color)?;
+        p.text(
+            &format!("{}%", d.percent),
+            (x + off + 18.0 * scale, y, x + off + width, y + h),
+            12.0 * scale,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_TEXT_ALIGNMENT_TRAILING,
+            color,
+        )?;
     }
     Ok(())
 }

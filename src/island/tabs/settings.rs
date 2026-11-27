@@ -252,7 +252,7 @@ impl App {
                     self.char_tick();
                 }
                 MusicEq | MusicTitle | MusicCover | CoverMode | MusicLyrics | MusicProgress | ProgressStyle
-                | PillWeather | PillWeatherSide | PillBattery | SpikeColor => {
+                | PillWeather | PillWeatherSide | PillBattery | PillDevices | SpikeColor => {
                     self.update_eq();
                     self.repaint_collapsed();
                 }

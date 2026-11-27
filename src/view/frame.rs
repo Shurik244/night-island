@@ -534,6 +534,7 @@ fn paint_tab(p: &Painter, tab: Tab, pill: Rect, scale: f32, ui: &UiState, clips:
         Tab::Clipboard => paint_clipboard(p, pill, scale, ui, clips)?,
         Tab::Controls => {
             paint_controls(p, pill, scale, ui)?;
+            paint_devices_row(p, pill, scale, ui)?;
             paint_metrics_row(p, pill, scale, ui)?;
         }
         Tab::Yandex => paint_yandex(

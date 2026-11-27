@@ -577,6 +577,10 @@ pub(in crate::island) extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: W
             with_app(|a| a.on_memory_tools());
             LRESULT(0)
         }
+        crate::platform::peripherals::WM_PERIPHERALS => {
+            with_app(|a| a.on_peripherals());
+            LRESULT(0)
+        }
         metrics::WM_METRICS => {
             with_app(|a| a.on_metrics());
             LRESULT(0)

@@ -218,6 +218,7 @@ impl App {
         agents::watch(hwnd);
         app.init_steam();
         steam::watch(hwnd);
+        crate::platform::peripherals::watch(hwnd);
         app.reload_dock();
         app.restore_tab();
         app.reload_reminders();
